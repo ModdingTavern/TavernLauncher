@@ -89,8 +89,10 @@ GAME_LOG_PATH = os.path.join(
     "A Township Tale", "Client", "logs", "unity-log.csv"
 )
 
-# Community server list endpoint (bogus until real endpoint exists)
-COMMUNITY_API = "https://api.themoddingtavern.com/servers"
+# Community server list backend — a small Flask app the server owner runs
+# at home (see community_server.py). Plain HTTP on the port they forwarded;
+# it's just public server metadata, nothing sensitive.
+COMMUNITY_API = "http://themoddingtavern.com:1763/servers"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ICON
@@ -386,7 +388,7 @@ def _mk_scrollbar(parent, command, orient="vertical"):
     sb = ttk.Scrollbar(parent, orient=orient, command=command, style=name)
     return sb
 
-def _mk_tree(parent, cols, widths, height=8):
+def _mk_tree(parent, cols, widths, height=8, hscroll=False):
     style = ttk.Style()
     style.configure("Tav.Treeview", background=SURF, fieldbackground=SURF,
                     foreground=PARCH, rowheight=26, borderwidth=0)
@@ -397,15 +399,34 @@ def _mk_tree(parent, cols, widths, height=8):
               foreground=[("selected","#ffd080")])
     f = tk.Frame(parent, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
     f.pack(fill="both", expand=True)
-    tree = ttk.Treeview(f, columns=cols, show="headings",
+
+    hsb = None
+    if hscroll:
+        # Pack the horizontal scrollbar at the bottom first so it claims its
+        # space before the tree body below fills the rest — reversing this
+        # order would let the tree body crowd the scrollbar out entirely.
+        hsb = _mk_scrollbar(f, None, "horizontal")
+        hsb.pack(side="bottom", fill="x")
+
+    body = tk.Frame(f, bg=SURF)
+    body.pack(fill="both", expand=True, padx=2, pady=2)
+
+    tree = ttk.Treeview(body, columns=cols, show="headings",
                         selectmode="browse", height=height, style="Tav.Treeview")
     for col, w in zip(cols, widths):
         tree.heading(col, text=col.replace("_"," ").title())
-        tree.column(col, width=w)
-    sb = _mk_scrollbar(f, tree.yview)
-    sb.pack(side="right", fill="y")
-    tree.config(yscrollcommand=sb.set)
-    tree.pack(side="left", fill="both", expand=True, padx=2, pady=2)
+        # With a horizontal scrollbar, columns should keep their exact width
+        # and overflow into scroll range rather than being squeezed to fit —
+        # that squeezing is exactly what made columns unreadable before.
+        tree.column(col, width=w, minwidth=w, stretch=not hscroll, anchor="w")
+
+    vsb = _mk_scrollbar(body, tree.yview, "vertical")
+    vsb.pack(side="right", fill="y")
+    tree.pack(side="left", fill="both", expand=True)
+    tree.config(yscrollcommand=vsb.set)
+    if hsb is not None:
+        hsb.config(command=tree.xview)
+        tree.config(xscrollcommand=hsb.set)
     return tree
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -417,7 +438,7 @@ class CommunityBrowser(tk.Toplevel):
         super().__init__(parent)
         self.title("Community Servers")
         self.configure(bg=BG)
-        self.geometry("560x400")
+        self.geometry("640x420")
         self.resizable(False, False)
         self._on_select = on_select
         self._servers   = []
@@ -438,7 +459,8 @@ class CommunityBrowser(tk.Toplevel):
 
         lf = tk.Frame(self, bg=BG)
         lf.pack(fill="both", expand=True, padx=20, pady=(0,8))
-        self.tree = _mk_tree(lf, ("name","address","players"), [240,180,80], height=8)
+        self.tree = _mk_tree(lf, ("name","address","players","locked"),
+                             [240,170,80,60], height=8, hscroll=True)
 
         br = tk.Frame(self, bg=BG)
         br.pack(fill="x", padx=20, pady=(0,12))
@@ -467,8 +489,9 @@ class CommunityBrowser(tk.Toplevel):
     def _populate(self):
         for s in self._servers:
             players = f"{s.get('player_count',0)}/{s.get('player_limit',50)}"
+            locked  = "🔒" if s.get("has_password") else ""
             self.tree.insert("","end",
-                values=(s.get("name","?"), s.get("address","?"), players))
+                values=(s.get("name","?"), s.get("address","?"), players, locked))
         self._status.set(f"{len(self._servers)} servers listed." if self._servers
                          else "No servers listed yet.")
 
@@ -477,7 +500,10 @@ class CommunityBrowser(tk.Toplevel):
         if not sel: return
         idx  = self.tree.index(sel[0])
         srv  = self._servers[idx]
-        self._on_select(srv.get("address",""), srv.get("name",""))
+        # "address" is "ip:port" for display — only the host is meaningful to
+        # the launcher today, since it always talks to the fixed AUTH_PORT.
+        host = srv.get("address","").split(":")[0]
+        self._on_select(host, srv.get("name",""))
         self.destroy()
 
 # ══════════════════════════════════════════════════════════════════════════════

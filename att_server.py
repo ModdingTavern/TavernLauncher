@@ -5,7 +5,7 @@ The Modding Tavern — Server Launcher
 import sys, os, subprocess, threading, time, csv, io, json, socket, hashlib, secrets
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import base64, hmac as _hmac, tempfile, struct, ctypes
+import base64, hmac as _hmac, tempfile, struct, ctypes, urllib.request, urllib.error
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DARK TITLE BAR  (Windows 10/11 — safe no-op elsewhere)
@@ -101,6 +101,12 @@ AUTH_PORT      = 1762
 CONSOLE_PORT   = 1758
 BASE_USER_ID   = 2000000000
 
+# Community server list backend — the small Flask app the server owner runs
+# at home (see community_server.py). Registration (POST) and unregistration
+# (DELETE) both go here; the same URL is used for GET on the client side.
+COMMUNITY_API = "http://themoddingtavern.com:1763/servers"
+COMMUNITY_HEARTBEAT_SECONDS = 120
+
 def load_cfg():
     try: return json.load(open(CONFIG_FILE))
     except: return {}
@@ -147,6 +153,18 @@ def load_server_settings():
 def save_server_settings(d):
     try: json.dump(d,open(SERVER_CFG,"w"),indent=2)
     except: pass
+
+def _get_or_create_listing_token():
+    """A stable secret identifying *this* server's row on the community list,
+    so heartbeats/updates/unregisters always target the right listing even
+    across restarts or a dynamic IP change."""
+    ss = load_server_settings()
+    tok = ss.get("community_listing_token")
+    if not tok:
+        tok = secrets.token_urlsafe(24)
+        ss["community_listing_token"] = tok
+        save_server_settings(ss)
+    return tok
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  USER DB / BLACKLIST / WHITELIST
@@ -579,8 +597,9 @@ def _field(parent):
     f.pack(fill="x", padx=20, pady=(0,3))
     return f
 
-def _hint(parent, text):
+def _hint(parent, text, wraplength=380):
     tk.Label(parent, text=text, bg=BG, fg=MUTED, justify="left",
+             wraplength=wraplength,
              font=("Segoe UI",8)).pack(anchor="w", padx=22, pady=(0,3))
 
 def _btn(parent, text, cmd, style="normal", **kw):
@@ -978,10 +997,15 @@ class ServerSettingsWindow(tk.Toplevel):
         super().__init__(parent)
         self.title("Server Settings")
         self.configure(bg=BG)
-        self.geometry("440x430")
+        self.geometry("440x430")  # placeholder; resized to fit content below
         self.resizable(False, False)
         self._on_save = on_save
         self._build()
+        # Fixed-size windows don't grow to fit their content automatically —
+        # size to whatever the fully-built layout actually needs, so adding
+        # a field later never silently clips the Save button off the bottom.
+        self.update_idletasks()
+        self.geometry(f"440x{self.winfo_reqheight()}")
         _enable_dark_titlebar(self)
 
     def _build(self):
@@ -997,6 +1021,13 @@ class ServerSettingsWindow(tk.Toplevel):
         tk.Entry(nf, textvariable=self.v_name, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
         _hint(self, "Shown to players who check your server.")
+        _divider(self)
+        _section_label(self, "MAX PLAYERS")
+        mf = _field(self)
+        self.v_max_players = tk.StringVar(value=str(ss.get("max_players", 24)))
+        tk.Entry(mf, textvariable=self.v_max_players, bg=SURF, fg=PARCH,
+                 insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
+        _hint(self, "Shown on the community list as a player-count cap.")
         _divider(self)
         _section_label(self, "PASSWORD  (leave blank to keep current / remove)")
         pf = _field(self)
@@ -1020,6 +1051,17 @@ class ServerSettingsWindow(tk.Toplevel):
                        bg=BG, fg=PARCH, selectcolor=SURF,
                        activebackground=BG, activeforeground=AMBER,
                        font=("Segoe UI",9)).pack(side="left")
+        _section_label(self, "COMMUNITY SERVER LIST")
+        clf = tk.Frame(self, bg=BG)
+        clf.pack(anchor="w", padx=22, pady=(0,2))
+        self.v_community = tk.BooleanVar(value=ss.get("community_listed", False))
+        tk.Checkbutton(clf, variable=self.v_community,
+                       text="Add this server to the global community list?",
+                       bg=BG, fg=PARCH, selectcolor=SURF,
+                       activebackground=BG, activeforeground=AMBER,
+                       font=("Segoe UI",9)).pack(side="left")
+        _hint(self, "Shares this server's name, IP, and port publicly so it shows "
+                     "up in every player's Community Servers list while it's online.")
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(10,6))
         _btn(self, "💾  Save Settings", self._save, "primary",
              font=("Georgia",11,"bold"), pady=12).pack(fill="x", padx=20, pady=(0,16))
@@ -1035,6 +1077,9 @@ class ServerSettingsWindow(tk.Toplevel):
         ss = load_server_settings()
         ss["name"] = self.v_name.get().strip() or "My Tavern Server"
         ss["whitelist_enabled"] = self.v_whitelist.get()
+        ss["community_listed"] = self.v_community.get()
+        try: ss["max_players"] = max(1, int(self.v_max_players.get().strip()))
+        except ValueError: ss["max_players"] = 24
         pw = self.v_password.get()
         if pw:
             ss["password_hash"] = hashlib.sha256(
@@ -1046,6 +1091,7 @@ class ServerSettingsWindow(tk.Toplevel):
         if self._on_save: self._on_save(ss["name"])
         messagebox.showinfo("Saved","Server settings saved.")
         self.destroy()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MAIN LAUNCHER
@@ -1066,6 +1112,9 @@ class ServerLauncher(tk.Tk):
         self._mgr_win  = None
         self._mods_win = None
         self._sett_win = None
+        self._community_registered = False
+        self._community_stop = threading.Event()
+        self._community_thread = None
         self._build_ui()
         self._load()
         self._start_log_tailer()
@@ -1183,7 +1232,10 @@ class ServerLauncher(tk.Tk):
     def _open_settings(self):
         if self._sett_win and self._sett_win.winfo_exists():
             self._sett_win.lift(); return
-        def on_save(name): self._sv_name_var.set(name)
+        def on_save(name):
+            self._sv_name_var.set(name)
+            self._apply_community_listing_state(
+                bool(self._proc and self._proc.poll() is None))
         self._sett_win = ServerSettingsWindow(self, on_save)
 
     def _open_manager(self):
@@ -1282,13 +1334,83 @@ class ServerLauncher(tk.Tk):
             self._pid_var.set(f"PID {self._proc.pid}" if on and self._proc else "")
             self._btn_start.config(state="disabled" if on else "normal")
             self._btn_stop.config(state="normal" if on else "disabled")
+            self._apply_community_listing_state(on)
         self.after(0, _do)
 
+    # ── Community server list ───────────────────────────────────────────────
+
+    def _apply_community_listing_state(self, server_online):
+        """Start or stop the background heartbeat so the community listing
+        tracks both the settings checkbox and whether the server is actually
+        online — flip either one and this brings the listing in line."""
+        ss = load_server_settings()
+        want_listed = bool(ss.get("community_listed")) and server_online
+        if want_listed and not self._community_registered:
+            self._community_registered = True
+            self._community_stop.clear()
+            self._community_thread = threading.Thread(
+                target=self._community_loop, daemon=True)
+            self._community_thread.start()
+        elif not want_listed and self._community_registered:
+            self._community_registered = False
+            self._community_stop.set()
+
+    def _community_loop(self):
+        first = True
+        while True:
+            self._register_community_listing(log=first)
+            first = False
+            if self._community_stop.wait(COMMUNITY_HEARTBEAT_SECONDS):
+                break
+        self._unregister_community_listing()
+
+    def _register_community_listing(self, log=False):
+        ss = load_server_settings()
+        try: port = int(self.v_port.get())
+        except: port = 1757
+        payload = {
+            "listing_token": _get_or_create_listing_token(),
+            "name": ss.get("name", "My Tavern Server"),
+            "port": port,
+            "player_limit": ss.get("max_players", 24),
+            "has_password": bool(ss.get("password_hash")),
+        }
+        try:
+            req = urllib.request.Request(COMMUNITY_API,
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "TavernServer/1.0"},
+                method="POST")
+            urllib.request.urlopen(req, timeout=8).read()
+            if log: self._print("Listed on the community server list.", "ok")
+        except Exception as e:
+            if log: self._print(f"Could not reach community list: {e}", "warn")
+
+    def _unregister_community_listing(self):
+        try:
+            req = urllib.request.Request(COMMUNITY_API,
+                data=json.dumps({"listing_token": _get_or_create_listing_token()}).encode(),
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "TavernServer/1.0"},
+                method="DELETE")
+            urllib.request.urlopen(req, timeout=5).read()
+            self._print("Removed from the community server list.", "dim")
+        except Exception:
+            pass
+
     def _on_close(self):
+        stopped_now = False
         if self._proc and self._proc.poll() is None:
             if messagebox.askyesno("Server running",
                                    "Stop the server before closing?"):
                 self._stop()
+                stopped_now = True
+        if self._community_registered and not stopped_now:
+            # _stop() above already triggers this via _set_running(False);
+            # only needed here if the server was left running on close.
+            self._community_stop.set()
+            self._community_registered = False
+            self._unregister_community_listing()
         self.destroy()
 
 
