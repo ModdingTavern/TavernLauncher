@@ -153,6 +153,7 @@ for _old, _new in (
 AUTH_PORT      = 1762
 CONSOLE_PORT   = 1758
 BASE_USER_ID   = 2000000000
+USERNAME_MAX_LEN = 16
 
 # Community server list backend — the small Flask app the server owner runs
 # at home (see community_server.py). Registration (POST) and unregistration
@@ -433,6 +434,12 @@ def _handle_auth(conn, addr, log_fn):
 
         if not username or not token:
             conn.sendall(json.dumps({"status":"error","message":"Missing credentials."}).encode())
+            return
+
+        if len(username) > USERNAME_MAX_LEN:
+            log_fn(f"Blocked (name too long): '{username[:USERNAME_MAX_LEN]}…' from {ip}", "warn")
+            conn.sendall(json.dumps({"status":"error",
+                "message": f"Usernames can be at most {USERNAME_MAX_LEN} characters."}).encode())
             return
 
         if _is_blacklisted(username, None, ip):

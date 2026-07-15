@@ -99,6 +99,7 @@ CYAN     = "#6ab0aa"
 MONO     = ("Consolas", 9)
 
 AUTH_PORT   = 1762
+USERNAME_MAX_LEN = 16
 
 GAME_LOG_PATH = os.path.join(
     os.path.expanduser("~"), "AppData", "Roaming",
@@ -1644,7 +1645,7 @@ class ClientLauncher(tk.Tk):
         tk.Entry(nf, textvariable=self.v_username, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10),
                  bd=6).pack(fill="x")
-        _hint(self, "Your save is tied to this name.")
+        _hint(self, f"Your save is tied to this name. Max {USERNAME_MAX_LEN} characters.")
 
         _section_label(self, "CHOOSE YOUR PLATFORM")
         pf2 = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
@@ -2258,6 +2259,10 @@ class ClientLauncher(tk.Tk):
             messagebox.showerror("Missing name",
                 "Please enter your username before connecting.")
             return
+        if len(username) > USERNAME_MAX_LEN:
+            messagebox.showerror("Name too long",
+                f"Usernames can be at most {USERNAME_MAX_LEN} characters.")
+            return
 
         self._save()
         self._action_btn.config(state="disabled")
@@ -2365,6 +2370,10 @@ class ClientLauncher(tk.Tk):
         if not username:
             messagebox.showerror("Missing name",
                 "Please enter your username before connecting.")
+            return
+        if len(username) > USERNAME_MAX_LEN:
+            messagebox.showerror("Name too long",
+                f"Usernames can be at most {USERNAME_MAX_LEN} characters.")
             return
 
         self._save()
