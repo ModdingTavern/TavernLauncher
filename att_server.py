@@ -154,6 +154,14 @@ AUTH_PORT      = 1762
 CONSOLE_PORT   = 1758
 BASE_USER_ID   = 2000000000
 USERNAME_MAX_LEN = 16
+USERNAME_EXTRA_CHARS = " -_"
+
+def _is_valid_username(username):
+    """ASCII letters/digits plus space, hyphen, underscore — mirrors the
+    client-side filter in att_client.py. Enforced here too since a bypassed
+    or modified client could still send anything as username."""
+    return all((c.isalnum() and c.isascii()) or c in USERNAME_EXTRA_CHARS
+               for c in username)
 
 # Community server list backend — the small Flask app the server owner runs
 # at home (see community_server.py). Registration (POST) and unregistration
@@ -314,9 +322,9 @@ def kick_player(username, ban=False):
     if not ok:
         return False, f"Console not available: {err}"
     if ban:
-        out, err = _console.send_command(f"player ban {username}")
+        out, err = _console.send_command(f'player ban "{username}"')
     else:
-        out, err = _console.send_command(f"player kick {username}")
+        out, err = _console.send_command(f'player kick "{username}"')
     _console.disconnect()
     if err: return False, err
     return True, out or "Done"
@@ -440,6 +448,12 @@ def _handle_auth(conn, addr, log_fn):
             log_fn(f"Blocked (name too long): '{username[:USERNAME_MAX_LEN]}…' from {ip}", "warn")
             conn.sendall(json.dumps({"status":"error",
                 "message": f"Usernames can be at most {USERNAME_MAX_LEN} characters."}).encode())
+            return
+
+        if not _is_valid_username(username):
+            log_fn(f"Blocked (invalid characters): '{username}' from {ip}", "warn")
+            conn.sendall(json.dumps({"status":"error",
+                "message":"Usernames can only contain letters, numbers, spaces, hyphens, and underscores."}).encode())
             return
 
         if _is_blacklisted(username, None, ip):

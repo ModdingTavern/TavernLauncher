@@ -100,6 +100,13 @@ MONO     = ("Consolas", 9)
 
 AUTH_PORT   = 1762
 USERNAME_MAX_LEN = 16
+USERNAME_EXTRA_CHARS = " -_"
+
+def _is_valid_username(username):
+    """ASCII letters/digits plus space, hyphen, underscore — keeps usernames
+    safe to embed in file names (token cache) and launch args without escaping."""
+    return all((c.isalnum() and c.isascii()) or c in USERNAME_EXTRA_CHARS
+               for c in username)
 
 GAME_LOG_PATH = os.path.join(
     os.path.expanduser("~"), "AppData", "Roaming",
@@ -1645,7 +1652,8 @@ class ClientLauncher(tk.Tk):
         tk.Entry(nf, textvariable=self.v_username, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10),
                  bd=6).pack(fill="x")
-        _hint(self, f"Your save is tied to this name. Max {USERNAME_MAX_LEN} characters.")
+        _hint(self, f"Your save is tied to this name. Max {USERNAME_MAX_LEN} characters. "
+                    "Letters, numbers, spaces, hyphens, and underscores only.")
 
         _section_label(self, "CHOOSE YOUR PLATFORM")
         pf2 = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
@@ -2263,6 +2271,10 @@ class ClientLauncher(tk.Tk):
             messagebox.showerror("Name too long",
                 f"Usernames can be at most {USERNAME_MAX_LEN} characters.")
             return
+        if not _is_valid_username(username):
+            messagebox.showerror("Invalid name",
+                "Usernames can only contain letters, numbers, spaces, hyphens, and underscores.")
+            return
 
         self._save()
         self._action_btn.config(state="disabled")
@@ -2374,6 +2386,10 @@ class ClientLauncher(tk.Tk):
         if len(username) > USERNAME_MAX_LEN:
             messagebox.showerror("Name too long",
                 f"Usernames can be at most {USERNAME_MAX_LEN} characters.")
+            return
+        if not _is_valid_username(username):
+            messagebox.showerror("Invalid name",
+                "Usernames can only contain letters, numbers, spaces, hyphens, and underscores.")
             return
 
         self._save()
