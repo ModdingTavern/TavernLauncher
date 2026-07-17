@@ -153,6 +153,18 @@ for _old, _new in (
 AUTH_PORT      = 1762
 CONSOLE_PORT   = 1758
 BASE_USER_ID   = 2000000000
+USERNAME_MAX_LEN = 16
+USERNAME_EXTRA_CHARS = " -_"
+SERVER_NAME_MAX_LEN = 32
+
+def _is_valid_name(name):
+    """ASCII letters/digits plus space, hyphen, underscore. Shared character
+    policy for both player usernames (mirrors the client-side filter in
+    att_client.py — enforced here too since a bypassed or modified client
+    could still send anything as username) and the server name field in
+    Server Settings."""
+    return all((c.isalnum() and c.isascii()) or c in USERNAME_EXTRA_CHARS
+               for c in name)
 
 # Community server list backend — the small Flask app the server owner runs
 # at home (see community_server.py). Registration (POST) and unregistration
@@ -313,9 +325,9 @@ def kick_player(username, ban=False):
     if not ok:
         return False, f"Console not available: {err}"
     if ban:
-        out, err = _console.send_command(f"player ban {username}")
+        out, err = _console.send_command(f'player ban "{username}"')
     else:
-        out, err = _console.send_command(f"player kick {username}")
+        out, err = _console.send_command(f'player kick "{username}"')
     _console.disconnect()
     if err: return False, err
     return True, out or "Done"
@@ -433,6 +445,18 @@ def _handle_auth(conn, addr, log_fn):
 
         if not username or not token:
             conn.sendall(json.dumps({"status":"error","message":"Missing credentials."}).encode())
+            return
+
+        if len(username) > USERNAME_MAX_LEN:
+            log_fn(f"Blocked (name too long): '{username[:USERNAME_MAX_LEN]}…' from {ip}", "warn")
+            conn.sendall(json.dumps({"status":"error",
+                "message": f"Usernames can be at most {USERNAME_MAX_LEN} characters."}).encode())
+            return
+
+        if not _is_valid_name(username):
+            log_fn(f"Blocked (invalid characters): '{username}' from {ip}", "warn")
+            conn.sendall(json.dumps({"status":"error",
+                "message":"Usernames can only contain letters, numbers, spaces, hyphens, and underscores."}).encode())
             return
 
         if _is_blacklisted(username, None, ip):
@@ -767,6 +791,151 @@ def _mk_tree(parent, cols, widths, height=8):
     tree.config(yscrollcommand=sb.set)
     tree.pack(side="left", fill="both", expand=True, padx=2, pady=2)
     return tree
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONSOLE WINDOW
+# ══════════════════════════════════════════════════════════════════════════════
+# Same binary-framed remote console protocol as the standalone att_console.py
+# script, embedded directly in the server app instead of needing a separate
+# terminal. Keeps its own dedicated socket rather than reusing the shared
+# `_console` ConsoleClient — that one is a one-shot connect/send/disconnect
+# helper for kick_player, whereas this stays connected the whole time the
+# window is open so it can stream unsolicited console output live.
+
+class ConsoleWindow(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Console")
+        self.configure(bg=BG)
+        self.geometry("640x480")
+        self.resizable(True, True)
+        _set_window_icon(self)
+        self._sock      = None
+        self._connected = False
+        self._stop      = threading.Event()
+        self._build()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        _enable_dark_titlebar(self)
+        self._connect()
+
+    def _build(self):
+        h = tk.Frame(self, bg=SURF, height=44)
+        h.pack(fill="x"); h.pack_propagate(False)
+        tk.Label(h, text="🖥  Console", bg=SURF, fg=AMBER,
+                 font=("Georgia",12,"bold")).pack(side="left", padx=16, pady=8)
+        self._status_var = tk.StringVar(value="Connecting…")
+        tk.Label(h, textvariable=self._status_var, bg=SURF, fg=MUTED,
+                 font=("Segoe UI",9)).pack(side="right", padx=16)
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+
+        lf = tk.Frame(self, bg=BG)
+        lf.pack(fill="both", expand=True, padx=12, pady=(10,6))
+        lb = tk.Frame(lf, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        lb.pack(fill="both", expand=True)
+        self.out = tk.Text(lb, bg=SURF, fg="#b09a78", font=MONO,
+                           relief="flat", bd=0, state="disabled", wrap="word")
+        sb = _mk_scrollbar(lb, self.out.yview)
+        sb.pack(side="right", fill="y")
+        self.out.config(yscrollcommand=sb.set)
+        self.out.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        for t,c in [("ok",GREEN),("warn",AMBER),("err",RED),("cyan",CYAN)]:
+            self.out.tag_config(t, foreground=c)
+
+        cf = tk.Frame(self, bg=BG)
+        cf.pack(fill="x", padx=12, pady=(0,12))
+        self.v_cmd = tk.StringVar()
+        entry = tk.Entry(cf, textvariable=self.v_cmd, bg=SURF, fg=PARCH,
+                         insertbackground=AMBER, relief="flat", font=("Consolas",10),
+                         bd=6)
+        entry.pack(side="left", fill="x", expand=True)
+        entry.bind("<Return>", lambda e: self._send())
+        entry.focus_set()
+        _btn(cf, "Send", self._send, "primary",
+             font=("Segoe UI",9,"bold"), pady=6, padx=14).pack(side="left", padx=(6,0))
+
+    def _append(self, text, tag=""):
+        self.out.config(state="normal")
+        self.out.insert("end", text, tag)
+        self.out.see("end")
+        self.out.config(state="disabled")
+
+    def _connect(self):
+        try:
+            with open(CONSOLE_TOKEN_FILE) as f:
+                token = f.read().strip()
+        except Exception:
+            self._status_var.set("No console token")
+            self._append("console_token.txt not found — start the server first.\n", "err")
+            return
+
+        def worker():
+            try:
+                s = socket.socket()
+                s.settimeout(4)
+                s.connect(("127.0.0.1", CONSOLE_PORT))
+                s.sendall(token.encode("utf-8"))
+                resp = s.recv(64).decode("utf-8", errors="replace").strip()
+                if resp != "ok":
+                    self.after(0, lambda: self._status_var.set(f"Rejected: {resp}"))
+                    return
+                s.settimeout(None)
+                self._sock = s
+                self._connected = True
+                self.after(0, lambda: self._status_var.set("Connected"))
+                self.after(0, lambda: self._append("[Connected]\n", "ok"))
+                self._receive_loop()
+            except Exception as e:
+                self.after(0, lambda err=str(e): self._status_var.set(f"Error: {err}"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _receive_loop(self):
+        buf, s = b"", self._sock
+        while not self._stop.is_set():
+            try:
+                data = s.recv(65536)
+                if not data:
+                    self.after(0, lambda: self._on_disconnected("Server closed the connection."))
+                    return
+                buf += data
+                # 2-byte ushort length + 1-byte type header, matching
+                # ConsoleClient.send_command's response framing.
+                while len(buf) >= 3:
+                    length = struct.unpack_from("<H", buf, 0)[0]
+                    if len(buf) < 3 + length:
+                        break
+                    payload = buf[3:3+length].decode("utf-8", errors="replace")
+                    buf = buf[3+length:]
+                    self.after(0, lambda p=payload: self._append(p))
+            except OSError:
+                if not self._stop.is_set():
+                    self.after(0, lambda: self._on_disconnected("Connection lost."))
+                return
+
+    def _on_disconnected(self, msg):
+        self._connected = False
+        self._status_var.set("Disconnected")
+        self._append(f"\n[{msg}]\n", "err")
+
+    def _send(self):
+        cmd = self.v_cmd.get().strip()
+        if not cmd or not self._connected or not self._sock:
+            return
+        self.v_cmd.set("")
+        self._append(f"> {cmd}\n", "cyan")
+        try:
+            payload = cmd.encode("utf-8")
+            # 4-byte int32 length + 1-byte type (0 = ConsoleCommand)
+            header = struct.pack("<IB", len(payload), 0)
+            self._sock.sendall(header + payload)
+        except Exception as e:
+            self._append(f"[Send failed: {e}]\n", "err")
+
+    def _on_close(self):
+        self._stop.set()
+        if self._sock:
+            try: self._sock.close()
+            except Exception: pass
+        self.destroy()
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PLAYER MANAGER WINDOW
@@ -1762,7 +1931,8 @@ class ServerSettingsWindow(tk.Toplevel):
         self.v_name = tk.StringVar(value=ss.get("name","My Tavern Server"))
         tk.Entry(nf, textvariable=self.v_name, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
-        _hint(self, "Shown to players who check your server.")
+        _hint(self, f"Shown to players who check your server. Max {SERVER_NAME_MAX_LEN} characters. "
+                    "Letters, numbers, spaces, hyphens, and underscores only.")
         _divider(self)
         _section_label(self, "MAX PLAYERS")
         mf = _field(self)
@@ -1870,8 +2040,18 @@ class ServerSettingsWindow(tk.Toplevel):
         messagebox.showinfo("Cleared", "Password removed.")
 
     def _save(self):
+        name = self.v_name.get().strip()
+        if name:
+            if len(name) > SERVER_NAME_MAX_LEN:
+                messagebox.showerror("Name too long",
+                    f"Server name can be at most {SERVER_NAME_MAX_LEN} characters.")
+                return
+            if not _is_valid_name(name):
+                messagebox.showerror("Invalid name",
+                    "Server name can only contain letters, numbers, spaces, hyphens, and underscores.")
+                return
         ss = load_server_settings()
-        ss["name"] = self.v_name.get().strip() or "My Tavern Server"
+        ss["name"] = name or "My Tavern Server"
         ss["whitelist_enabled"] = self.v_whitelist.get()
         ss["enforce_ip_limit"] = self.v_ip_limit.get()
         ss["community_listed"] = self.v_community.get()
@@ -1912,6 +2092,7 @@ class ServerLauncher(tk.Tk):
         self._mgr_win  = None
         self._mods_win = None
         self._sett_win = None
+        self._console_win = None
         self._community_registered = False
         self._community_stop = threading.Event()
         self._community_thread = None
@@ -1968,6 +2149,8 @@ class ServerLauncher(tk.Tk):
         _btn(tr, "⚙ Settings", self._open_settings, font=("Segoe UI",9),
              pady=7, padx=12).pack(side="left")
         _btn(tr, "👤 Players",  self._open_manager,  font=("Segoe UI",9),
+             pady=7, padx=12).pack(side="left", padx=6)
+        _btn(tr, "🖥 Console",  self._open_console,  font=("Segoe UI",9),
              pady=7, padx=12).pack(side="left", padx=6)
         self._patch_btn = _btn(tr, "🩹 Patch", self._on_patch_click,
                                font=("Segoe UI",9), pady=7, padx=12)
@@ -2185,6 +2368,11 @@ class ServerLauncher(tk.Tk):
         if self._mgr_win and self._mgr_win.winfo_exists():
             self._mgr_win.lift(); return
         self._mgr_win = PlayerManagerWindow(self)
+
+    def _open_console(self):
+        if self._console_win and self._console_win.winfo_exists():
+            self._console_win.lift(); return
+        self._console_win = ConsoleWindow(self)
 
     def _open_mods(self):
         exe = self.v_exe.get().strip()
