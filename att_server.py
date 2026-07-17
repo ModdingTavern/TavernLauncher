@@ -155,13 +155,16 @@ CONSOLE_PORT   = 1758
 BASE_USER_ID   = 2000000000
 USERNAME_MAX_LEN = 16
 USERNAME_EXTRA_CHARS = " -_"
+SERVER_NAME_MAX_LEN = 32
 
-def _is_valid_username(username):
-    """ASCII letters/digits plus space, hyphen, underscore — mirrors the
-    client-side filter in att_client.py. Enforced here too since a bypassed
-    or modified client could still send anything as username."""
+def _is_valid_name(name):
+    """ASCII letters/digits plus space, hyphen, underscore. Shared character
+    policy for both player usernames (mirrors the client-side filter in
+    att_client.py — enforced here too since a bypassed or modified client
+    could still send anything as username) and the server name field in
+    Server Settings."""
     return all((c.isalnum() and c.isascii()) or c in USERNAME_EXTRA_CHARS
-               for c in username)
+               for c in name)
 
 # Community server list backend — the small Flask app the server owner runs
 # at home (see community_server.py). Registration (POST) and unregistration
@@ -450,7 +453,7 @@ def _handle_auth(conn, addr, log_fn):
                 "message": f"Usernames can be at most {USERNAME_MAX_LEN} characters."}).encode())
             return
 
-        if not _is_valid_username(username):
+        if not _is_valid_name(username):
             log_fn(f"Blocked (invalid characters): '{username}' from {ip}", "warn")
             conn.sendall(json.dumps({"status":"error",
                 "message":"Usernames can only contain letters, numbers, spaces, hyphens, and underscores."}).encode())
@@ -1928,7 +1931,8 @@ class ServerSettingsWindow(tk.Toplevel):
         self.v_name = tk.StringVar(value=ss.get("name","My Tavern Server"))
         tk.Entry(nf, textvariable=self.v_name, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
-        _hint(self, "Shown to players who check your server.")
+        _hint(self, f"Shown to players who check your server. Max {SERVER_NAME_MAX_LEN} characters. "
+                    "Letters, numbers, spaces, hyphens, and underscores only.")
         _divider(self)
         _section_label(self, "MAX PLAYERS")
         mf = _field(self)
@@ -2036,8 +2040,18 @@ class ServerSettingsWindow(tk.Toplevel):
         messagebox.showinfo("Cleared", "Password removed.")
 
     def _save(self):
+        name = self.v_name.get().strip()
+        if name:
+            if len(name) > SERVER_NAME_MAX_LEN:
+                messagebox.showerror("Name too long",
+                    f"Server name can be at most {SERVER_NAME_MAX_LEN} characters.")
+                return
+            if not _is_valid_name(name):
+                messagebox.showerror("Invalid name",
+                    "Server name can only contain letters, numbers, spaces, hyphens, and underscores.")
+                return
         ss = load_server_settings()
-        ss["name"] = self.v_name.get().strip() or "My Tavern Server"
+        ss["name"] = name or "My Tavern Server"
         ss["whitelist_enabled"] = self.v_whitelist.get()
         ss["enforce_ip_limit"] = self.v_ip_limit.get()
         ss["community_listed"] = self.v_community.get()
