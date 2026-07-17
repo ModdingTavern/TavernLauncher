@@ -93,17 +93,19 @@ def _enable_dark_titlebar(window):
         pass
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  USERNAME VALIDATION
+#  NAME VALIDATION
 # ══════════════════════════════════════════════════════════════════════════════
 USERNAME_MAX_LEN = 16
 USERNAME_EXTRA_CHARS = " -_"
 
-def _is_valid_username(username):
-    """ASCII letters/digits plus space, hyphen, underscore. Enforced both in
-    the client UI and, authoritatively, on the server — a bypassed or
-    modified client could still send anything as username."""
+def _is_valid_name(name):
+    """ASCII letters/digits plus space, hyphen, underscore. Shared character
+    policy for player usernames (enforced both in the client UI and,
+    authoritatively, on the server — a bypassed or modified client could
+    still send anything as username) and the server name field in Server
+    Settings."""
     return all((c.isalnum() and c.isascii()) or c in USERNAME_EXTRA_CHARS
-               for c in username)
+               for c in name)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PATHS

@@ -27,7 +27,7 @@ from tavern_common import (
     AUTH_PORT, BG, SURF, SURF2, BORDER, AMBER, AMBERDIM, PARCH, MUTED,
     GREEN, RED, CYAN, MONO,
     _enable_dark_titlebar, _set_window_icon,
-    USERNAME_MAX_LEN, USERNAME_EXTRA_CHARS, _is_valid_username,
+    USERNAME_MAX_LEN, USERNAME_EXTRA_CHARS, _is_valid_name,
     _tavern_data_dir, _migrate_legacy_file,
     _b64url, _jwt, GameLogTailer,
     _divider, _section_label, _field, _btn, _mk_scrollbar, _FlashingButton,
@@ -1221,7 +1221,7 @@ class ClientLauncher(tk.Tk):
             messagebox.showerror("Name too long",
                 f"Usernames can be at most {USERNAME_MAX_LEN} characters.")
             return False
-        if not _is_valid_username(username):
+        if not _is_valid_name(username):
             messagebox.showerror("Invalid name",
                 "Usernames can only contain letters, numbers, spaces, hyphens, and underscores.")
             return False

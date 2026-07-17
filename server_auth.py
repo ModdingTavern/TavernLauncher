@@ -12,7 +12,7 @@ here, never the other way around.
 import os, json, time, threading, hashlib, socket
 
 from tavern_common import (
-    AUTH_PORT, USERNAME_MAX_LEN, _is_valid_username,
+    AUTH_PORT, USERNAME_MAX_LEN, _is_valid_name,
     _app_dir, _tavern_data_dir, _migrate_legacy_file, _jwt,
 )
 
@@ -223,7 +223,7 @@ def _handle_auth(conn, addr, log_fn):
                 "message": f"Usernames can be at most {USERNAME_MAX_LEN} characters."}).encode())
             return
 
-        if not _is_valid_username(username):
+        if not _is_valid_name(username):
             log_fn(f"Blocked (invalid characters): '{username}' from {ip}", "warn")
             conn.sendall(json.dumps({"status":"error",
                 "message":"Usernames can only contain letters, numbers, spaces, hyphens, and underscores."}).encode())
