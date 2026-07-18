@@ -353,7 +353,7 @@ def _valid_port(value, default=1757):
         return default
 
 
-def build_tokens(user_id, username):
+def build_tokens(user_id, username, tavern_token=""):
     exp, uid = 9999999999, str(user_id)
     a = _jwt({"UserId":uid,"Username":username,"role":"Access","is_verified":"True",
               "is_member":"True","Policy":["offline","play_offline","server_access_pre_alpha",
@@ -361,10 +361,12 @@ def build_tokens(user_id, username):
               "server_access_development","server_access_testing","game_access_testing",
               "server_owner","debug_features","admin_vr_modes","database_admin",
               "server_create_development","reuse_refresh_tokens"],
+              "TavernToken":tavern_token,
               "exp":exp,"iss":"AltaWebAPI","aud":"AltaClient"})
     r = _jwt({"UserId":uid,"role":"Refresh","exp":exp,"iss":"AltaWebAPI","aud":"AltaClient"})
     i = _jwt({"UserId":uid,"Username":username,"role":"Identity","is_member":"True",
-              "is_dev":"True","exp":exp,"iss":"AltaWebAPI","aud":"AltaClient"})
+              "is_dev":"True","TavernToken":tavern_token,
+              "exp":exp,"iss":"AltaWebAPI","aud":"AltaClient"})
     return a, r, i
 
 # Headless/direct-connect servers have no port-1762 gate to hand out a
@@ -1057,6 +1059,123 @@ def _install_yamldotnet(game_dir):
     os.makedirs(dest_dir, exist_ok=True)
     shutil.copy2(src, os.path.join(dest_dir, YAMLDOTNET_FILENAME))
 
+# CircuitsVoiceChat ships as two DLLs (the mod itself plus the Concentus
+# codec it depends on) in one release zip on its own repo — real GitHub
+# releases now, same "latest" alias trick as MelonLoader, not the
+# Patch-folder-only situation YamlDotNet is still in. Per the mod's own
+# install instructions: the mod itself goes in Mods/, Concentus (a shared
+# codec library) goes in UserLibs/ alongside YamlDotNet.
+CIRCUITSVOICECHAT_REPO = "CircuitLord/CircuitsVoiceChat"
+CIRCUITSVOICECHAT_DESTINATIONS = {
+    "CircuitsVoiceChat.dll": "Mods",
+    "Concentus.dll": "UserLibs",
+}
+
+def _get_circuitsvoicechat_latest_tag():
+    """Same redirect-peek trick as MelonLoader's tag check — no GitHub API
+    call, no rate limit."""
+    loc = _get_redirect_location(f"https://github.com/{CIRCUITSVOICECHAT_REPO}/releases/latest")
+    if not loc:
+        return None
+    return loc.rstrip("/").split("/")[-1]
+
+def _circuitsvoicechat_manual_paths():
+    """Where a copy of both DLLs shipped with this launcher release is
+    checked for, as an automatic fallback if the GitHub download fails or
+    is taking too long — same reasoning as MelonLoader's bundled fallback."""
+    return {name: os.path.join(_app_dir(), "Patch", name)
+            for name in CIRCUITSVOICECHAT_DESTINATIONS}
+
+def _circuitsvoicechat_installed(game_dir):
+    return all(os.path.isfile(os.path.join(game_dir, subdir, name))
+               for name, subdir in CIRCUITSVOICECHAT_DESTINATIONS.items())
+
+def _circuitsvoicechat_status(game_dir):
+    """Returns 'missing', 'outdated', 'unknown', or 'current' — same state
+    machine as _melonloader_status, now that this has a real tag to check
+    against instead of just a local file."""
+    if not _circuitsvoicechat_installed(game_dir):
+        return "missing"
+    installed_tag = _load_mod_meta(game_dir).get("circuitsvoicechat_tag")
+    if not installed_tag or installed_tag.startswith("bundled:"):
+        return "unknown"
+    try:
+        latest = _get_circuitsvoicechat_latest_tag()
+    except Exception:
+        return "unknown"
+    if not latest:
+        return "unknown"
+    return "current" if latest == installed_tag else "outdated"
+
+def _install_circuitsvoicechat(game_dir, on_progress):
+    """Tries downloading the latest CircuitsVoiceChat release first; if
+    that fails, or a bundled copy exists in Patch/ and the download hasn't
+    finished quickly, falls back to the bundled DLLs — the exact same
+    network-first, fast-fallback pattern as _install_melonloader. Checks
+    both destination files exist in whichever source is actually used
+    before writing anything, so a partial zip or a missing bundled file
+    can't leave the mod half-installed."""
+    manual_paths = _circuitsvoicechat_manual_paths()
+    have_bundled = all(os.path.isfile(p) for p in manual_paths.values())
+
+    tag = None
+    try: tag = _get_circuitsvoicechat_latest_tag()
+    except Exception: pass
+
+    downloaded_files = None  # filename -> bytes, populated only on a real successful download
+    if tag:
+        zip_filename = f"CircuitsVoiceChat-{tag}.zip"
+        url = (f"https://github.com/{CIRCUITSVOICECHAT_REPO}/releases/latest/"
+               f"download/{urllib.parse.quote(zip_filename)}")
+        tmp_zip = os.path.join(tempfile.gettempdir(), "tavern_circuitsvoicechat_dl.zip")
+        try:
+            if have_bundled:
+                # A good fallback is right there — don't make the user
+                # wait long before using it.
+                _download_with_progress(url, tmp_zip, on_progress,
+                                         connect_timeout=8, max_total_seconds=15)
+            else:
+                _download_with_progress(url, tmp_zip, on_progress)
+            on_progress("Extracting CircuitsVoiceChat…")
+            found = {}
+            with _open_zip_with_retry(tmp_zip) as zf:
+                for wanted in CIRCUITSVOICECHAT_DESTINATIONS:
+                    match = _find_zip_entry(zf, wanted)
+                    if not match:
+                        raise RuntimeError(
+                            f"The downloaded release zip didn't contain {wanted}.")
+                    found[wanted] = zf.read(match)
+            downloaded_files = found
+        except Exception:
+            downloaded_files = None
+            if not have_bundled:
+                raise
+            on_progress("Couldn't reach GitHub — using the version bundled with this launcher…")
+        finally:
+            try: os.remove(tmp_zip)
+            except Exception: pass
+    elif not have_bundled:
+        raise RuntimeError(
+            "Couldn't reach GitHub to check for CircuitsVoiceChat, and no bundled "
+            "copy was found in Patch/ either.")
+
+    for name, subdir in CIRCUITSVOICECHAT_DESTINATIONS.items():
+        dest_dir = os.path.join(game_dir, subdir)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest_path = os.path.join(dest_dir, name)
+        if downloaded_files is not None:
+            with open(dest_path, "wb") as f:
+                f.write(downloaded_files[name])
+        else:
+            shutil.copy2(manual_paths[name], dest_path)
+
+    meta = _load_mod_meta(game_dir)
+    if downloaded_files is not None and tag:
+        meta["circuitsvoicechat_tag"] = tag
+    else:
+        meta["circuitsvoicechat_tag"] = "bundled:local"
+    _save_mod_meta(game_dir, meta)
+
 
 @contextlib.contextmanager
 def _force_ipv4():
@@ -1163,6 +1282,47 @@ def _download_with_progress(url, dest_path, on_progress,
         return dict(resp.headers)
 
 
+def _open_zip_with_retry(path, retries=8, delay=1.0):
+    """Windows sometimes briefly locks a freshly-downloaded file while
+    antivirus real-time protection scans it — and a .zip containing DLLs
+    is exactly the kind of file that gets scanned most aggressively. A
+    plain zipfile.ZipFile() open can stall or fail unpredictably during
+    that window, with no timeout of its own (this is local disk I/O, not
+    network, so the download's own timeout doesn't cover it at all). This
+    retries a few times with short pauses — up to ~8s total — before
+    giving up for real, rather than hanging indefinitely or failing on
+    what's usually just a few seconds of transient scanning."""
+    last_err = None
+    for _ in range(retries):
+        try:
+            return zipfile.ZipFile(path)
+        except (PermissionError, OSError) as e:
+            last_err = e
+            time.sleep(delay)
+    raise RuntimeError(
+        f"Couldn't open the downloaded file — {last_err}\n\n"
+        "This can happen if antivirus is still scanning it. Try clicking "
+        "Install again, or temporarily disable real-time scanning and retry.")
+
+
+def _find_zip_entry(zf, wanted_filename):
+    """Finds a zip entry matching wanted_filename, tolerating a version
+    suffix baked into the actual filename — e.g. the real CircuitsVoiceChat
+    release ships "CircuitsVoiceChat-v1.0.4.dll" for what we track as
+    "CircuitsVoiceChat.dll". That suffix changes every release, so an exact
+    filename match would break on every version bump; matching by stem
+    prefix + same extension instead means a new release just works without
+    ever needing a code change here. Returns the zip entry's real name (for
+    reading), or None if nothing matches."""
+    stem, ext = os.path.splitext(wanted_filename)
+    stem, ext = stem.lower(), ext.lower()
+    for n in zf.namelist():
+        b_stem, b_ext = os.path.splitext(os.path.basename(n))
+        if b_ext.lower() == ext and b_stem.lower().startswith(stem):
+            return n
+    return None
+
+
 def _melonloader_manual_zip_path(arch):
     """Where a copy of MelonLoader shipped with this launcher release is
     checked for, as an automatic fallback if the network download fails
@@ -1212,7 +1372,7 @@ def _install_melonloader(game_dir, arch, on_progress):
 
     source_zip = tmp_zip if downloaded_ok else manual_zip
     on_progress("Extracting MelonLoader…")
-    with zipfile.ZipFile(source_zip) as zf:
+    with _open_zip_with_retry(source_zip) as zf:
         zf.extractall(game_dir)
     if downloaded_ok:
         try: os.remove(tmp_zip)
@@ -1306,12 +1466,16 @@ def _tavernlib_status(game_dir):
 
 
 def _mods_need_attention(game_dir):
-    """True if either mod is missing or outdated — the trigger for flashing
-    the main window's Mods button. Network failures during the update checks
-    never trigger a false alarm on their own — only a real missing install
-    (a purely local, always-reliable check) does that unconditionally."""
+    """True if either required mod is missing/outdated, or the optional
+    CircuitsVoiceChat is outdated — the trigger for flashing the main
+    window's Mods button. Deliberately not "missing" for the optional mod:
+    not having opted into it is a normal, expected state, not something
+    that needs attention. Network failures during the update checks never
+    trigger a false alarm on their own — only a real missing install (a
+    purely local, always-reliable check) does that unconditionally."""
     return (_melonloader_status(game_dir) in ("missing", "outdated") or
-            _tavernlib_status(game_dir)   in ("missing", "outdated"))
+            _tavernlib_status(game_dir)   in ("missing", "outdated") or
+            _circuitsvoicechat_status(game_dir) == "outdated")
 
 
 # ── Patch ─────────────────────────────────────────────────────────────────────
@@ -1412,8 +1576,9 @@ class ModsWindow(tk.Toplevel):
                  "reached (some networks/antivirus block it), the version bundled "
                  "with this launcher is used automatically instead.",
             bg=BG, fg=MUTED, font=("Segoe UI",9), wraplength=470, justify="left"
-        ).pack(anchor="w", padx=20, pady=(10,8))
+        ).pack(anchor="w", padx=20, pady=(10,4))
 
+        _section_label(self, "REQUIRED MODS")
         self._ml_btn = self._mod_row(
             "MelonLoader", "The mod loader itself — required before anything else.",
             self._on_melonloader_click)
@@ -1423,6 +1588,11 @@ class ModsWindow(tk.Toplevel):
         self._tl_btn = self._mod_row(
             "TavernLib", "Our plugin — adds this server's mod support to the game.",
             self._on_tavernlib_click)
+
+        _section_label(self, "OPTIONAL MODS")
+        self._cvc_btn = self._mod_row(
+            "CircuitsVoiceChat", "Proximity voice chat for players on this server.",
+            self._on_circuitsvoicechat_click)
 
         tk.Label(self, text="More mods will be manageable from here later.",
                  bg=BG, fg=MUTED, font=("Segoe UI",8,"italic")
@@ -1477,13 +1647,15 @@ class ModsWindow(tk.Toplevel):
             ml = _melonloader_status(self._game_dir)
             tl = _tavernlib_status(self._game_dir)
             yaml_ok = _yamldotnet_installed(self._game_dir)
-            self.after(0, lambda: self._apply_states(ml, tl, yaml_ok))
+            cvc = _circuitsvoicechat_status(self._game_dir)
+            self.after(0, lambda: self._apply_states(ml, tl, yaml_ok, cvc))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_states(self, ml_state, tl_state, yaml_ok):
+    def _apply_states(self, ml_state, tl_state, yaml_ok, cvc_state):
         self._apply_row_state(self._ml_btn, ml_state)
         self._apply_row_state(self._tl_btn, tl_state)
         self._apply_yaml_state(yaml_ok)
+        self._apply_row_state(self._cvc_btn, cvc_state)
         self._status.set("")
         if self._on_status_change: self._on_status_change()
 
@@ -1511,6 +1683,7 @@ class ModsWindow(tk.Toplevel):
         self._ml_btn.config(state=state)
         self._yaml_btn.config(state=state)
         self._tl_btn.config(state=state)
+        self._cvc_btn.config(state=state)
         self._status.set(msg)
 
     def _on_yamldotnet_click(self):
@@ -1562,6 +1735,23 @@ class ModsWindow(tk.Toplevel):
                 _install_tavernlib(self._game_dir,
                     lambda m: self.after(0, lambda: self._status.set(m)))
                 self.after(0, lambda: self._finish_install(True, "TavernLib installed."))
+            except Exception as e:
+                self.after(0, lambda: self._finish_install(False, f"Install failed: {e}"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_circuitsvoicechat_click(self):
+        if self._busy: return
+        if not _melonloader_installed(self._game_dir):
+            messagebox.showwarning("Install MelonLoader first",
+                "CircuitsVoiceChat is a MelonLoader mod — install MelonLoader above first.")
+            return
+        self._set_busy(True, "Installing CircuitsVoiceChat…")
+
+        def worker():
+            try:
+                _install_circuitsvoicechat(self._game_dir,
+                    lambda m: self.after(0, lambda: self._status.set(m)))
+                self.after(0, lambda: self._finish_install(True, "CircuitsVoiceChat installed."))
             except Exception as e:
                 self.after(0, lambda: self._finish_install(False, f"Install failed: {e}"))
         threading.Thread(target=worker, daemon=True).start()
@@ -2333,7 +2523,7 @@ class ClientLauncher(tk.Tk):
         cfg["recent_servers"] = recent[:20]
         save_cfg(cfg)
 
-        access, refresh, identity = build_tokens(user_id, username)
+        access, refresh, identity = build_tokens(user_id, username, token)
         args = [exe, "/force_offline",
                 "/access_token", access, "/refresh_token", refresh,
                 "/identity_token", identity, "/join_local_server"]
