@@ -99,6 +99,15 @@ CYAN     = "#6ab0aa"
 MONO     = ("Consolas", 9)
 
 AUTH_PORT   = 1762
+
+# The dropdown shows friendly platform names, but the game itself still
+# needs the original /vrmode values it always expected — this is a purely
+# visual simplification, not a protocol change. PLATFORM_LEGACY_TO_DISPLAY
+# handles a config file saved before this change (which would have the old
+# "OpenVR"/"Oculus" display string persisted) so existing users' saved
+# choice still loads correctly instead of silently resetting.
+PLATFORM_DISPLAY_TO_BACKEND = {"SteamVR": "openvr", "Quest": "oculus"}
+PLATFORM_LEGACY_TO_DISPLAY  = {"OpenVR": "SteamVR", "Oculus": "Quest"}
 USERNAME_MAX_LEN = 16
 USERNAME_EXTRA_CHARS = " -_"
 
@@ -305,6 +314,23 @@ def authenticate(host, username, token, password=None, timeout=8):
     if status == "not_whitelisted": return None, "You are not on the whitelist for this server."
     return None, resp.get("message", "Authentication failed.")
 
+def ticket_request(host, action, username, token, timeout=10, **kwargs):
+    """Sends one ticket_action request to a server's auth port and returns
+    the parsed JSON response. Raises on a connection failure — callers
+    should catch and show a clear error, same as any other network call
+    here. Uses a larger receive buffer than the plain auth exchange, since
+    a ticket list with several tickets and comment threads can genuinely
+    exceed the smaller buffer used for a simple login response."""
+    payload = {"ticket_action": action, "username": username, "token": token}
+    payload.update(kwargs)
+    s = socket.socket()
+    s.settimeout(timeout)
+    s.connect((host, AUTH_PORT))
+    s.sendall(json.dumps(payload).encode())
+    raw = s.recv(65536)
+    s.close()
+    return json.loads(raw.decode())
+
 def ping_server(host, timeout=5):
     """Returns (info_dict, latency_ms) or raises."""
     t0 = time.time()
@@ -354,6 +380,18 @@ def _valid_port(value, default=1757):
 
 
 def build_tokens(user_id, username, tavern_token=""):
+    """tavern_token is our OWN internal secret (the same one _get_or_create_token
+    already tracks per server+username) — embedded here as an extra custom
+    claim purely for a server-side mod to verify independently. UserId and
+    Username alone aren't enough for that: since the "offline" HMAC key is
+    necessarily public (the game itself has to know it to run in
+    /force_offline mode at all), anyone can hand-craft a validly-signed JWT
+    claiming any UserId/Username they like. This extra claim is the one
+    thing in here a forger can't guess — a cryptographically random value
+    that's only ever handed out after actually passing the auth handshake
+    (password, whitelist, blacklist all included), so a mod checking it
+    against the server's own records closes that gap regardless of what
+    else the presented JWT claims to be."""
     exp, uid = 9999999999, str(user_id)
     a = _jwt({"UserId":uid,"Username":username,"role":"Access","is_verified":"True",
               "is_member":"True","Policy":["offline","play_offline","server_access_pre_alpha",
@@ -1542,6 +1580,304 @@ def apply_patch(game_exe):
     shutil.copy2(src, dst)
 
 
+class TicketsWindow(tk.Toplevel):
+    """Player-facing support tickets — create one, see the server owner's
+    replies, respond, or close it yourself. Tied to whichever server +
+    username the player is actually using, since a ticket only means
+    anything in the context of one specific server's own ticket database."""
+    def __init__(self, parent, default_host="", default_username=""):
+        super().__init__(parent)
+        self.title("Support Tickets")
+        self.configure(bg=BG)
+        self.geometry("640x600")
+        self.resizable(True, True)
+        _set_window_icon(self)
+        ttk.Style().theme_use("clam")
+        self._tickets = []
+        self._selected_ticket = None
+        self._build(default_host, default_username)
+        _enable_dark_titlebar(self)
+        self._refresh(silent=True)
+        # Same reasoning as the main launcher windows — start at exactly
+        # what the fully-built layout needs, then set that as the floor,
+        # so shrinking the window can never clip the Reply/Close Ticket row.
+        self.update_idletasks()
+        fit_w = max(640, self.winfo_reqwidth())
+        fit_h = max(600, self.winfo_reqheight())
+        self.geometry(f"{fit_w}x{fit_h}")
+        self.minsize(fit_w, fit_h)
+
+    def _build(self, default_host, default_username):
+        h = tk.Frame(self, bg=SURF, height=44)
+        h.pack(fill="x"); h.pack_propagate(False)
+        tk.Label(h, text="🎫  Support Tickets", bg=SURF, fg=AMBER,
+                 font=("Georgia",12,"bold")).pack(side="left", padx=16, pady=8)
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+
+        sf = tk.Frame(self, bg=BG)
+        sf.pack(fill="x", padx=16, pady=(10,4))
+        tk.Label(sf, text="Server:", bg=BG, fg=MUTED, font=("Segoe UI",9)).pack(side="left")
+        self.v_host = tk.StringVar(value=default_host)
+        tk.Entry(sf, textvariable=self.v_host, bg=SURF, fg=PARCH,
+                 insertbackground=AMBER, relief="flat", font=("Consolas",10),
+                 bd=6, width=20).pack(side="left", padx=(6,10))
+        tk.Label(sf, text="Username:", bg=BG, fg=MUTED, font=("Segoe UI",9)).pack(side="left")
+        self.v_username = tk.StringVar(value=default_username)
+        tk.Entry(sf, textvariable=self.v_username, bg=SURF, fg=PARCH,
+                 insertbackground=AMBER, relief="flat", font=("Consolas",10),
+                 bd=6, width=14).pack(side="left", padx=(6,0))
+        _btn(sf, "⚑ Pick Saved", self._pick_saved_server,
+             font=("Segoe UI",8), pady=4, padx=6).pack(side="left", padx=(8,0))
+        _hint(self, "Tickets are tied to whichever username+server you actually play on.")
+
+        br = tk.Frame(self, bg=BG)
+        br.pack(fill="x", padx=16, pady=(0,8))
+        _btn(br, "⟳ Refresh My Tickets", self._refresh, "primary",
+             font=("Segoe UI",9), pady=6, padx=10).pack(side="left")
+        _btn(br, "+ New Ticket", self._new_ticket,
+             font=("Segoe UI",9), pady=6, padx=10).pack(side="left", padx=(6,0))
+
+        body = tk.Frame(self, bg=BG)
+        body.pack(fill="both", expand=True, padx=16, pady=(0,10))
+
+        # A fixed-height outer frame for the tree — _mk_tree's own wrapper
+        # always requests expand=True internally, which would otherwise
+        # compete with `detail` below for space and squeeze out the Reply/
+        # Close Ticket row. The tree only ever needs to show a short list,
+        # so it gets just its natural size; `detail` (below) claims
+        # whatever's actually left over.
+        tree_container = tk.Frame(body, bg=BG)
+        tree_container.pack(fill="x")
+        self.tree = _mk_tree(tree_container, ("title","status","updated"), [280,80,140], height=7)
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        detail = tk.Frame(body, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        detail.pack(fill="both", expand=True, pady=(8,0))
+
+        self.v_detail_title = tk.StringVar(value="Select a ticket, or open a new one.")
+        tk.Label(detail, textvariable=self.v_detail_title, bg=SURF, fg=AMBER,
+                 font=("Georgia",10,"bold"), wraplength=560, justify="left"
+                 ).pack(anchor="w", padx=10, pady=(10,4))
+
+        thread_frame = tk.Frame(detail, bg=BG)
+        thread_frame.pack(fill="both", expand=True, padx=10, pady=(0,6))
+        self.thread_text = tk.Text(thread_frame, bg=SURF2, fg=PARCH, relief="flat",
+                                   bd=0, wrap="word", state="disabled",
+                                   font=("Segoe UI",9), height=8)
+        tsb = _mk_scrollbar(thread_frame, self.thread_text.yview)
+        tsb.pack(side="right", fill="y")
+        self.thread_text.config(yscrollcommand=tsb.set)
+        self.thread_text.pack(side="left", fill="both", expand=True)
+        self.thread_text.tag_config("player", foreground=CYAN)
+        self.thread_text.tag_config("owner", foreground=AMBER)
+        self.thread_text.tag_config("meta", foreground=MUTED)
+
+        action_row = tk.Frame(detail, bg=SURF)
+        action_row.pack(fill="x", padx=10, pady=(0,10))
+        self.v_reply = tk.StringVar()
+        tk.Entry(action_row, textvariable=self.v_reply, bg=SURF2, fg=PARCH,
+                 insertbackground=AMBER, relief="flat", font=("Consolas",9),
+                 bd=6).pack(side="left", fill="x", expand=True)
+        _btn(action_row, "Reply", self._respond, font=("Segoe UI",9),
+             pady=6, padx=8).pack(side="left", padx=(6,0))
+        _btn(action_row, "Close Ticket", self._close_ticket, "danger",
+             font=("Segoe UI",9), pady=6, padx=8).pack(side="left", padx=(6,0))
+
+    def _current_host_username(self, silent=False):
+        host = self.v_host.get().strip()
+        username = self.v_username.get().strip()
+        if not host or not username:
+            if not silent:
+                messagebox.showerror("Missing info",
+                    "Enter both a server and a username.", parent=self)
+            return None, None
+        return host, username
+
+    def _pick_saved_server(self):
+        def on_select(ip, name, port="1757"):
+            self.v_host.set(ip)
+            self._refresh(silent=True)
+        ServerListPanel(self, on_select)
+
+    def _refresh(self, silent=False):
+        host, username = self._current_host_username(silent=silent)
+        if not host: return
+        resolved = _resolve_ip_for_game(host)
+        token, _ = _get_or_create_token(resolved, username)
+        def worker():
+            try:
+                resp = ticket_request(resolved, "list_mine", username, token)
+            except Exception as e:
+                if not silent:
+                    self.after(0, lambda: messagebox.showerror(
+                        "Couldn't fetch tickets", str(e), parent=self))
+                return
+            if resp.get("status") != "ok":
+                # Most common cause here: this username+server combo has
+                # never actually joined the server, so there's nothing to
+                # recognize yet — completely normal the first time this
+                # window is opened, not worth surfacing as an error unless
+                # the player explicitly clicked Refresh to ask.
+                if not silent:
+                    self.after(0, lambda: messagebox.showerror(
+                        "Error", resp.get("message","Unknown error"), parent=self))
+                return
+            self.after(0, lambda: self._apply_tickets(resp.get("tickets", [])))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_tickets(self, tickets):
+        self._tickets = tickets
+        for r in self.tree.get_children(): self.tree.delete(r)
+        for t in sorted(tickets, key=lambda t: t["updated_at"], reverse=True):
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(t["updated_at"]))
+            self.tree.insert("", "end", iid=t["ticket_id"], values=(t["title"], t["status"], ts))
+
+    def _on_select(self, _=None):
+        sel = self.tree.selection()
+        if not sel: return
+        t = next((x for x in self._tickets if x["ticket_id"] == sel[0]), None)
+        if not t: return
+        self._selected_ticket = t
+        self.v_detail_title.set(f"{t['title']}  ({t['status']})")
+        self.thread_text.config(state="normal")
+        self.thread_text.delete("1.0", "end")
+        self.thread_text.insert("end", t["description"] + "\n\n")
+        for c in t.get("comments", []):
+            who = "Server Owner" if c["from"] == "owner" else "You"
+            tag = "owner" if c["from"] == "owner" else "player"
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(c["at"]))
+            self.thread_text.insert("end", f"[{ts}] {who}: ", tag)
+            self.thread_text.insert("end", f"{c['message']}\n")
+        self.thread_text.see("end")
+        self.thread_text.config(state="disabled")
+
+    def _new_ticket(self):
+        host, username = self._current_host_username()
+        if not host: return
+
+        win = tk.Toplevel(self)
+        win.title("New Ticket")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        _set_window_icon(win)
+
+        _section_label(win, "TITLE")
+        tf = _field(win)
+        v_title = tk.StringVar()
+        tk.Entry(tf, textvariable=v_title, bg=SURF, fg=PARCH,
+                 insertbackground=AMBER, relief="flat", font=("Consolas",10),
+                 bd=6).pack(fill="x")
+
+        _section_label(win, "DESCRIPTION")
+        df = tk.Frame(win, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        df.pack(fill="both", expand=True, padx=20, pady=(0,6))
+        desc_text = tk.Text(df, bg=SURF, fg=PARCH, insertbackground=AMBER,
+                            relief="flat", bd=6, wrap="word", height=8,
+                            font=("Segoe UI",9))
+        desc_text.pack(fill="both", expand=True)
+
+        def _submit():
+            title = v_title.get().strip()
+            description = desc_text.get("1.0","end").strip()
+            if not title or not description:
+                messagebox.showerror("Missing info",
+                    "Title and description are both required.", parent=win)
+                return
+            resolved = _resolve_ip_for_game(host)
+            token, _ = _get_or_create_token(resolved, username)
+            def worker():
+                try:
+                    resp = ticket_request(resolved, "create", username, token,
+                                          title=title, description=description, server=host)
+                except Exception as e:
+                    self.after(0, lambda: messagebox.showerror(
+                        "Couldn't submit ticket", str(e), parent=win))
+                    return
+                if resp.get("status") != "ok":
+                    self.after(0, lambda: messagebox.showerror(
+                        "Error", resp.get("message","Unknown error"), parent=win))
+                    return
+                def _done():
+                    win.destroy()
+                    self._refresh()
+                self.after(0, _done)
+            threading.Thread(target=worker, daemon=True).start()
+
+        tk.Frame(win, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(4,6))
+        _btn(win, "📨  Submit Ticket", _submit, "primary",
+             font=("Georgia",11,"bold"), pady=12).pack(fill="x", padx=20, pady=(0,16))
+
+        win.update_idletasks()
+        win.geometry(f"420x{win.winfo_reqheight()}")
+        _enable_dark_titlebar(win)
+        win.transient(self)
+        win.grab_set()
+
+    def _selected_ticket_id(self):
+        if not self._selected_ticket:
+            messagebox.showinfo("No selection", "Select a ticket first.", parent=self)
+            return None
+        return self._selected_ticket["ticket_id"]
+
+    def _respond(self):
+        tid = self._selected_ticket_id()
+        if not tid: return
+        msg = self.v_reply.get().strip()
+        if not msg: return
+        if self._selected_ticket.get("status") != "open":
+            messagebox.showinfo("Ticket closed", "This ticket is already closed.", parent=self)
+            return
+        host, username = self._current_host_username()
+        resolved = _resolve_ip_for_game(host)
+        token, _ = _get_or_create_token(resolved, username)
+        def worker():
+            try:
+                resp = ticket_request(resolved, "respond", username, token,
+                                      ticket_id=tid, message=msg)
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror(
+                    "Couldn't send reply", str(e), parent=self))
+                return
+            if resp.get("status") != "ok":
+                self.after(0, lambda: messagebox.showerror(
+                    "Error", resp.get("message","Unknown error"), parent=self))
+                return
+            def _done():
+                self.v_reply.set("")
+                self._refresh()
+            self.after(0, _done)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _close_ticket(self):
+        tid = self._selected_ticket_id()
+        if not tid: return
+        if self._selected_ticket.get("status") != "open":
+            messagebox.showinfo("Already closed", "This ticket is already closed.", parent=self)
+            return
+        msg = simpledialog.askstring("Close Ticket",
+            "Optional closing message (e.g. \"fixed it myself\"):", parent=self) or ""
+        if not messagebox.askyesno("Close Ticket",
+                "Close this ticket? You won't be able to reply to it afterward.", parent=self):
+            return
+        host, username = self._current_host_username()
+        resolved = _resolve_ip_for_game(host)
+        token, _ = _get_or_create_token(resolved, username)
+        def worker():
+            try:
+                resp = ticket_request(resolved, "close", username, token,
+                                      ticket_id=tid, message=msg)
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror(
+                    "Couldn't close ticket", str(e), parent=self))
+                return
+            if resp.get("status") != "ok":
+                self.after(0, lambda: messagebox.showerror(
+                    "Error", resp.get("message","Unknown error"), parent=self))
+                return
+            self.after(0, self._refresh)
+        threading.Thread(target=worker, daemon=True).start()
+
+
 class ModsWindow(tk.Toplevel):
     def __init__(self, parent, exe_path, on_status_change=None):
         super().__init__(parent)
@@ -1814,7 +2150,7 @@ class ClientLauncher(tk.Tk):
     def _build_ui(self):
         self._header()
 
-        _section_label(self, "GAME EXECUTABLE")
+        _section_label(self, "Path to 'A Township Tale.exe'")
         pf = _field(self)
         self.v_exe = tk.StringVar()
         self.v_exe.trace_add("write", self._on_exe_changed)
@@ -1823,7 +2159,6 @@ class ClientLauncher(tk.Tk):
                  bd=6).pack(side="left", fill="x", expand=True)
         _btn(pf, "Browse", self._browse, font=("Segoe UI",9),
              padx=10, pady=6).pack(side="right")
-        _hint(self, "Path to 'A Township Tale.exe'")
         btn_row_mods = tk.Frame(self, bg=BG)
         btn_row_mods.pack(fill="x", padx=20, pady=(4,0))
         self._patch_btn = _btn(btn_row_mods, "🩹 Patch", self._on_patch_click,
@@ -1848,13 +2183,12 @@ class ClientLauncher(tk.Tk):
         _section_label(self, "CHOOSE YOUR PLATFORM")
         pf2 = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         pf2.pack(fill="x", padx=20, pady=(0,4))
-        self.v_platform = tk.StringVar(value="OpenVR")
-        _mk_combobox(pf2, self.v_platform, ["OpenVR","Oculus"])
-        _hint(self, "OpenVR = SteamVR  ·  Oculus = Quest")
+        self.v_platform = tk.StringVar(value="SteamVR")
+        _mk_combobox(pf2, self.v_platform, ["SteamVR","Quest"])
 
         _divider(self)
 
-        _section_label(self, "DESTINATION")
+        _section_label(self, "Destination (leave blank for localhost)")
         sf = _field(self)
         self.v_ip = tk.StringVar()
         self.v_ip.trace_add("write", self._on_ip_changed)
@@ -1872,7 +2206,8 @@ class ClientLauncher(tk.Tk):
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
         _btn(btn_row_dest, "🌍 Community Servers", self._open_community,
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=6)
-        _hint(self, "Server IP — leave blank for local. Port defaults to 1757.")
+        _btn(btn_row_dest, "🎫 Tickets",           self._open_tickets,
+             font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
 
         # ── Action area ──────────────────────────────────────────────────────
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=20, pady=6)
@@ -1912,9 +2247,6 @@ class ClientLauncher(tk.Tk):
                     ("cyan",CYAN),("dim",MUTED),("error",RED),
                     ("info","#b09a78"),("debug",MUTED)]:
             self.log.tag_config(t, foreground=c)
-        self._log_status = tk.StringVar(value="Awaiting game…")
-        tk.Label(lf, textvariable=self._log_status, bg=BG, fg=MUTED,
-                 font=("Segoe UI",8)).pack(anchor="w", pady=(3,0))
 
         # ── Enhanced Debugging / Show MelonLoader toggles ────────────────────
         df = tk.Frame(self, bg=BG)
@@ -2008,10 +2340,11 @@ class ClientLauncher(tk.Tk):
     # ── Token badge / animation ─────────────────────────────────────────────
 
     def _show_token_button(self):
-        """Reveal the token badge and make sure it's flashing. Called at
-        startup if a token file already exists, and after every successful
-        connection. Once shown, it keeps flashing for the rest of the
-        session — it's meant to keep reminding the player the file exists."""
+        """Reveal the token badge. Called at startup if a token file already
+        exists, and after every successful connection. Only starts the
+        flash if the player hasn't already clicked through the "Yes, I
+        understand" acknowledgment — once they have, it stays a plain,
+        non-flashing button for the rest of time, on this machine."""
         if self._header_canvas.itemcget(self._token_btn_item, "state") != "normal":
             self._header_canvas.itemconfigure(self._token_btn_item, state="normal")
             # Position it correctly immediately — otherwise it sits at the
@@ -2022,13 +2355,22 @@ class ClientLauncher(tk.Tk):
             hgt = self._header_canvas.winfo_height()
             discord_w = self._discord_btn.winfo_reqwidth()
             self._header_canvas.coords(self._token_btn_item, w - 14 - discord_w - 10, hgt // 2)
-        if not self._token_animating:
+        if not self._token_animating and not load_cfg().get("token_ack", False):
             self._start_token_animation()
 
     def _start_token_animation(self):
         self._token_animating = True
         self._token_anim_phase = 0
         self._animate_token_btn()
+
+    def _stop_token_animation(self):
+        self._token_animating = False
+        if self._token_anim_job:
+            try: self.after_cancel(self._token_anim_job)
+            except Exception: pass
+            self._token_anim_job = None
+        try: self._token_btn.config(bg=SURF2, fg=AMBER)
+        except Exception: pass
 
     def _animate_token_btn(self):
         if not self._token_animating: return
@@ -2039,7 +2381,28 @@ class ClientLauncher(tk.Tk):
         self._token_anim_job = self.after(450, self._animate_token_btn)
 
     def _on_token_button_click(self):
-        messagebox.showinfo("About Your Token File", self._token_note, parent=self)
+        win = tk.Toplevel(self)
+        win.title("About Your Token File")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        _set_window_icon(win)
+        tk.Label(win, text=self._token_note, bg=BG, fg=PARCH, justify="left",
+                 wraplength=360, font=("Segoe UI",9)).pack(padx=20, pady=(20,16))
+
+        def _ack():
+            cfg = load_cfg()
+            cfg["token_ack"] = True
+            save_cfg(cfg)
+            self._stop_token_animation()
+            win.destroy()
+
+        _btn(win, "Yes, I understand", _ack, "primary",
+             font=("Segoe UI",10,"bold"), pady=10).pack(fill="x", padx=20, pady=(0,20))
+        win.update_idletasks()
+        win.geometry(f"400x{win.winfo_reqheight()}")
+        _enable_dark_titlebar(win)
+        win.transient(self)
+        win.grab_set()
 
     # ── Mods alert / animation ──────────────────────────────────────────────
     # Unlike the token badge, this flashes only *while there's a problem* —
@@ -2175,9 +2538,12 @@ class ClientLauncher(tk.Tk):
         self.v_username.set(cfg.get("username",""))
         # "none" (flatscreen) is temporarily disabled — exploitable — so a
         # value saved before this change doesn't silently keep working just
-        # because it's already sitting in the user's config file.
-        saved_platform = cfg.get("platform", "OpenVR")
-        self.v_platform.set(saved_platform if saved_platform in ("OpenVR", "Oculus") else "OpenVR")
+        # because it's already sitting in the user's config file. Also
+        # translates a pre-rename save ("OpenVR"/"Oculus") to the current
+        # display names, so upgrading doesn't silently reset this choice.
+        saved_platform = cfg.get("platform", "SteamVR")
+        saved_platform = PLATFORM_LEGACY_TO_DISPLAY.get(saved_platform, saved_platform)
+        self.v_platform.set(saved_platform if saved_platform in ("SteamVR", "Quest") else "SteamVR")
         self.v_ip.set(cfg.get("last_ip",""))
         self.v_port.set(cfg.get("last_port","1757"))
         self.v_debug_helper.set(cfg.get("debug_helper", False))
@@ -2270,6 +2636,10 @@ class ClientLauncher(tk.Tk):
             self._selected_kind = kind; self._save()
         CommunityBrowser(self, on_select)
 
+    def _open_tickets(self):
+        TicketsWindow(self, default_host=self.v_ip.get().strip(),
+                     default_username=self.v_username.get().strip())
+
     def _open_mods(self):
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
@@ -2307,10 +2677,7 @@ class ClientLauncher(tk.Tk):
             short = lg.split(".")[-1] if lg else ""
             pre   = f"[{ts}]" + (f" [{short}]" if short else "")
             self.after(0, lambda: self._append_log(f"{pre} {msg}", tag))
-        def on_status(s):
-            if s == "watching":
-                self.after(0, lambda: self._log_status.set("Watching game log…"))
-        self._tailer = GameLogTailer(GAME_LOG_PATH, on_line, on_status)
+        self._tailer = GameLogTailer(GAME_LOG_PATH, on_line)
         self._tailer.start()
 
     def _append_log(self, line, tag):
@@ -2437,6 +2804,7 @@ class ClientLauncher(tk.Tk):
         exe      = self.v_exe.get().strip()
         username = self.v_username.get().strip()
         platform = self.v_platform.get()
+        platform = PLATFORM_DISPLAY_TO_BACKEND.get(platform, platform)
         ip       = self.v_ip.get().strip()
         display_host = ip if ip else "127.0.0.1"
         # Resolved once and used everywhere identity-sensitive matters (token
@@ -2562,6 +2930,7 @@ class ClientLauncher(tk.Tk):
         exe      = self.v_exe.get().strip()
         username = self.v_username.get().strip()
         platform = self.v_platform.get()
+        platform = PLATFORM_DISPLAY_TO_BACKEND.get(platform, platform)
         ip       = self.v_ip.get().strip()
         host     = ip if ip else "127.0.0.1"
 

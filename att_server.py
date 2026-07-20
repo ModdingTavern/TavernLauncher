@@ -491,6 +491,162 @@ def _read_live_player_status():
     except Exception:
         return None, None
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  SUPPORT TICKETS
+# ══════════════════════════════════════════════════════════════════════════════
+# A lightweight support system so players have an easy way to reach a
+# server owner. Rides the same port-1762 connection already used for the
+# join handshake — every action here requires a real username+token pair
+# that's already registered in USERS_FILE, so filing/managing a ticket can
+# never be anonymous or impersonate someone else. Kept in its own file
+# rather than folded into USERS_FILE, since tickets are this launcher's own
+# concern (not something a server-side mod needs to parse) and can grow
+# much larger over time than the player database ever would.
+TICKETS_FILE = os.path.join(_tavern_data_dir(), "tickets.json")
+_tickets_lock = threading.RLock()
+
+TICKET_TITLE_MAX_LEN   = 80
+TICKET_DESC_MAX_LEN     = 2000
+TICKET_MESSAGE_MAX_LEN  = 1000
+TICKET_MAX_ACTIVE_PER_USER      = 3
+TICKET_CREATE_COOLDOWN_SECONDS  = 60
+
+def _load_tickets():
+    with _tickets_lock:
+        try:
+            d = json.load(open(TICKETS_FILE))
+        except Exception:
+            d = {}
+        if not isinstance(d, dict):
+            d = {}
+        d.setdefault("tickets", [])
+        return d
+
+def _save_tickets(d):
+    with _tickets_lock:
+        try: json.dump(d, open(TICKETS_FILE, "w"), indent=2)
+        except Exception: pass
+
+def _handle_ticket_request(req, ip, log_fn):
+    """Dispatches one ticket_action request and returns the dict to send
+    back as the JSON response. Every action requires a real, already-
+    registered username+token pair — the same identity binding used for
+    joining — checked before anything else runs."""
+    username = str(req.get("username","")).strip()
+    token    = str(req.get("token","")).strip()
+    action   = str(req.get("ticket_action","")).strip()
+
+    if not username or not token:
+        return {"status":"error","message":"Missing credentials."}
+
+    users = _load_users()
+    entry = users.get(username.lower())
+    if not entry or str(entry.get("token") or "") != token:
+        return {"status":"error",
+                "message":"Not recognized — join the server at least once first."}
+
+    if _is_blacklisted(username, entry.get("user_id"), ip):
+        return {"status":"error","message":"You are not permitted."}
+
+    if action == "create":
+        return _ticket_create(username, req)
+    elif action == "list_mine":
+        return _ticket_list_mine(username)
+    elif action == "respond":
+        return _ticket_respond(username, req)
+    elif action == "close":
+        return _ticket_close(username, req)
+    return {"status":"error","message":"Unknown ticket action."}
+
+def _ticket_create(username, req):
+    title       = str(req.get("title","")).strip()[:TICKET_TITLE_MAX_LEN]
+    description = str(req.get("description","")).strip()[:TICKET_DESC_MAX_LEN]
+    server      = str(req.get("server","")).strip()[:120]
+    if not title or not description:
+        return {"status":"error","message":"Title and description are required."}
+
+    with _tickets_lock:
+        data = _load_tickets()
+        tickets = data["tickets"]
+        mine = [t for t in tickets if t["username"].lower() == username.lower()]
+        open_count = sum(1 for t in mine if t["status"] == "open")
+        if open_count >= TICKET_MAX_ACTIVE_PER_USER:
+            return {"status":"error",
+                    "message": f"You already have {TICKET_MAX_ACTIVE_PER_USER} active "
+                               "tickets. Close one before opening another."}
+        if mine:
+            last_created = max(t["created_at"] for t in mine)
+            elapsed = time.time() - last_created
+            if elapsed < TICKET_CREATE_COOLDOWN_SECONDS:
+                wait = int(TICKET_CREATE_COOLDOWN_SECONDS - elapsed)
+                return {"status":"error",
+                        "message": f"Please wait {wait}s before opening another ticket."}
+
+        now = time.time()
+        ticket = {
+            "ticket_id":   secrets.token_urlsafe(8),
+            "username":    username,
+            "server":      server,
+            "title":       title,
+            "description": description,
+            "status":      "open",
+            "created_at":  now,
+            "updated_at":  now,
+            "closed_by":   None,
+            "comments":    [],
+        }
+        tickets.append(ticket)
+        _save_tickets(data)
+    return {"status":"ok","ticket_id":ticket["ticket_id"]}
+
+def _ticket_list_mine(username):
+    data = _load_tickets()
+    mine = [t for t in data["tickets"] if t["username"].lower() == username.lower()]
+    mine.sort(key=lambda t: t["updated_at"], reverse=True)
+    return {"status":"ok","tickets":mine}
+
+def _ticket_respond(username, req):
+    ticket_id = str(req.get("ticket_id","")).strip()
+    message   = str(req.get("message","")).strip()[:TICKET_MESSAGE_MAX_LEN]
+    if not ticket_id or not message:
+        return {"status":"error","message":"Missing ticket_id or message."}
+    with _tickets_lock:
+        data = _load_tickets()
+        for t in data["tickets"]:
+            if t["ticket_id"] == ticket_id:
+                if t["username"].lower() != username.lower():
+                    return {"status":"error","message":"That's not your ticket."}
+                if t["status"] != "open":
+                    return {"status":"error","message":"This ticket is closed."}
+                t["comments"].append({"from":"player","message":message,"at":time.time()})
+                t["updated_at"] = time.time()
+                _save_tickets(data)
+                return {"status":"ok"}
+    return {"status":"error","message":"Ticket not found."}
+
+def _ticket_close(username, req):
+    ticket_id = str(req.get("ticket_id","")).strip()
+    message   = str(req.get("message","")).strip()[:TICKET_MESSAGE_MAX_LEN]
+    if not ticket_id:
+        return {"status":"error","message":"Missing ticket_id."}
+    with _tickets_lock:
+        data = _load_tickets()
+        for t in data["tickets"]:
+            if t["ticket_id"] == ticket_id:
+                if t["username"].lower() != username.lower():
+                    return {"status":"error","message":"That's not your ticket."}
+                if t["status"] != "open":
+                    return {"status":"error","message":"Already closed."}
+                if message:
+                    t["comments"].append({"from":"player","message":message,"at":time.time()})
+                t["status"]     = "closed"
+                t["closed_by"]  = "player"
+                t["updated_at"] = time.time()
+                _save_tickets(data)
+                return {"status":"ok"}
+    return {"status":"error","message":"Ticket not found."}
+
+
 def _handle_auth(conn, addr, log_fn):
     ip = addr[0] if addr else "?"
     try:
@@ -498,7 +654,7 @@ def _handle_auth(conn, addr, log_fn):
         if not _throttle_ok(ip):
             conn.sendall(json.dumps({"status":"error","message":"Too many attempts."}).encode())
             return
-        data = conn.recv(4096)
+        data = conn.recv(65536)
         if not data: return
         req = json.loads(data.decode())
 
@@ -518,6 +674,14 @@ def _handle_auth(conn, addr, log_fn):
             live_count, live_limit = _read_live_player_status()
             if live_count is not None: resp["player_count"] = live_count
             if live_limit is not None and live_limit > 0: resp["player_limit"] = live_limit
+            conn.sendall(json.dumps(resp).encode())
+            return
+
+        # ── support tickets — isolated from the main join flow below, so
+        # this can never affect (or be affected by) the whitelist/password
+        # gate meant for actually joining the game ──
+        if req.get("ticket_action"):
+            resp = _handle_ticket_request(req, ip, log_fn)
             conn.sendall(json.dumps(resp).encode())
             return
 
@@ -608,7 +772,8 @@ def _handle_auth(conn, addr, log_fn):
                         return
                 existing = [u["user_id"] for u in users.values()]
                 user_id  = max(existing, default=BASE_USER_ID) + 1
-                users[key] = {"user_id": user_id, "token": token, "registered_from": ip}
+                users[key] = {"user_id": user_id, "token": token,
+                              "registered_from": ip, "roles": []}
                 _save_users(users)
                 log_fn(f"New player: '{username}' (ID {user_id}) from {ip}", "ok")
 
@@ -884,6 +1049,223 @@ def _mk_tree(parent, cols, widths, height=8):
 # helper for kick_player, whereas this stays connected the whole time the
 # window is open so it can stream unsolicited console output live.
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONSOLE COMMANDS  (for autocomplete in ConsoleWindow)
+# ══════════════════════════════════════════════════════════════════════════════
+# Extracted from the community command reference doc. Not guaranteed to be
+# 100% exhaustive or perfectly current with every game version, but covers
+# the documented set well enough to be a genuinely useful autocomplete —
+# same idea as any professional console/CLI tool offering completions
+# against a known command list.
+CONSOLE_COMMANDS = [
+    "agents print",
+    "audio microphone",
+    "debug count",
+    "debug count-all",
+    "debug count-behaviours",
+    "debug count-scripts",
+    "debug entities",
+    "debug entity-health",
+    "debug export-navmesh",
+    "debug fixedtime",
+    "debug lag",
+    "debug load-marker",
+    "debug nameid",
+    "debug open-logs",
+    "debug prefabcounts",
+    "debug print-names",
+    "debug remote-console",
+    "debug server-stats",
+    "debug set",
+    "debug static",
+    "debug tracking",
+    "debug turabada-ai",
+    "festivities info",
+    "festivities list",
+    "festivities start",
+    "festivities stop",
+    "game connect",
+    "game connect-player",
+    "game create-server",
+    "game delete-save",
+    "game find",
+    "game ip-local",
+    "game join-ip",
+    "game join-server",
+    "game list-recent",
+    "game local-test",
+    "game local-test-scene",
+    "game show-all",
+    "game show-discover",
+    "game show-online",
+    "game show-open",
+    "game show-owned",
+    "game show-public",
+    "game start-local",
+    "game start-server",
+    "game startclean",
+    "game stop-mode",
+    "global-population list",
+    "global-population set-size",
+    "global-population spawned",
+    "global-population teleport",
+    "global-population teleport-to",
+    "help",
+    "help full",
+    "help modules",
+    "help search",
+    "impacts sync",
+    "info",
+    "info cli",
+    "info player-mode",
+    "info server",
+    "info system",
+    "info user",
+    "info version",
+    "landmarks enable",
+    "landmarks load-enabled",
+    "leaderboard create",
+    "leaderboard get-rank",
+    "leaderboard list",
+    "leaderboard remove-checkpoint",
+    "leaderboard set-board",
+    "leaderboard set-checkpoint",
+    "login",
+    "logout",
+    "logs",
+    "logs change-target",
+    "logs config",
+    "logs destroy-trace",
+    "logs warn-stack",
+    "maintenance garbage",
+    "maintenance resources",
+    "microtutorial active",
+    "microtutorial exit",
+    "microtutorial list",
+    "microtutorial next-step",
+    "microtutorial set-log-level",
+    "microtutorial start",
+    "mods",
+    "mods add",
+    "mods path",
+    "mods refresh",
+    "mods remove",
+    "mods restart",
+    "mods start",
+    "mods stop",
+    "profiling cleanslatememory",
+    "profiling dumpsize",
+    "profiling heapdump",
+    "profiling memorydump",
+    "profiling sample",
+    "progress fill-book",
+    "progress fill-books",
+    "progress fillcaveteleporter",
+    "progress fillcommunityboxes",
+    "progress finishboxes",
+    "progress forgeall",
+    "progress generatecaves",
+    "progress list-books",
+    "progress listcaveteleporter",
+    "progress repaircaveteleporters",
+    "progression allxp",
+    "progression buyskill",
+    "progression checkallxp",
+    "progression clearall",
+    "progression clearpath",
+    "progression list",
+    "progression offlinelevels",
+    "progression pathlevelup",
+    "progression pathxp",
+    "progression printofflinelevels",
+    "progression showskills",
+    "quality dynamic-load-multiplier",
+    "quality lod-bias",
+    "quality static-load-multiplier",
+    "quit",
+    "recent-players test-record",
+    "repair-box",
+    "repair-box list-items",
+    "repeat",
+    "repeat last",
+    "repeat stop",
+    "repeat stopall",
+    "report-players create",
+    "report-players list",
+    "select",
+    "select destroy",
+    "select find",
+    "select get",
+    "select look-at",
+    "select move",
+    "select prefab",
+    "select rotate",
+    "select snap-ground",
+    "select snap-to",
+    "select tostring",
+    "select unselect",
+    "server migrate",
+    "server start",
+    "settings changesetting",
+    "settings disable-board",
+    "settings enable-board",
+    "settings heat",
+    "settings infoboard",
+    "settings infoboard-list",
+    "settings list",
+    "settings population",
+    "settings possible",
+    "settings reset",
+    "settings save",
+    "settings settoggle",
+    "settings toggle",
+    "social addfriend",
+    "social listfriends",
+    "social removefriend",
+    "spawn",
+    "spawn exact",
+    "spawn find",
+    "spawn infodump",
+    "spawn list",
+    "spawn local",
+    "spawn moulds",
+    "spawn multi",
+    "spawn package",
+    "spawn pages",
+    "spawn population",
+    "spawn population-list",
+    "spawn string",
+    "spawn string-raw",
+    "time",
+    "time future",
+    "time keywords",
+    "time ofday",
+    "time set",
+    "time toggle",
+    "trade atm",
+    "trade empty",
+    "trade post",
+    "trade post-string",
+    "trial list",
+    "trial players",
+    "trial progress",
+    "trial reset",
+    "users statistics",
+    "wacky chisel-deck",
+    "wacky destroy",
+    "wacky inputscale",
+    "wacky marcopolo",
+    "wacky replace",
+    "wacky replace-selected",
+    "wacky setvolume",
+    "websocket subscribe",
+    "websocket subscriptions",
+    "websocket unsubscribe",
+    "world caves",
+    "world forest",
+]
+
+
 class ConsoleWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
@@ -930,10 +1312,103 @@ class ConsoleWindow(tk.Toplevel):
                          insertbackground=AMBER, relief="flat", font=("Consolas",10),
                          bd=6)
         entry.pack(side="left", fill="x", expand=True)
-        entry.bind("<Return>", lambda e: self._send())
         entry.focus_set()
         _btn(cf, "Send", self._send, "primary",
              font=("Segoe UI",9,"bold"), pady=6, padx=14).pack(side="left", padx=(6,0))
+
+        # ── Command autocomplete ──────────────────────────────────────────────
+        # A floating suggestion list under the entry, positioned via place(in_=)
+        # so it overlays correctly regardless of the pack layout around it.
+        self._ac_listbox = tk.Listbox(self, bg=SURF2, fg=PARCH,
+                                      selectbackground=AMBERDIM, selectforeground="#ffd080",
+                                      relief="flat", bd=0, highlightthickness=1,
+                                      highlightbackground=BORDER, font=("Consolas",10),
+                                      activestyle="none")
+        self._ac_visible = False
+        self._ac_matches = []
+
+        def _hide_autocomplete():
+            if self._ac_visible:
+                self._ac_listbox.place_forget()
+                self._ac_visible = False
+
+        def _show_autocomplete(matches):
+            self._ac_matches = matches
+            self._ac_listbox.delete(0, "end")
+            for m in matches:
+                self._ac_listbox.insert("end", m)
+            self._ac_listbox.selection_clear(0, "end")
+            self._ac_listbox.selection_set(0)
+            self._ac_listbox.config(height=min(6, len(matches)))
+            # Anchored ABOVE the entry (its own bottom-left corner sits at
+            # the entry's top-left), not below it — the entry sits right
+            # above the Send button near the window's bottom edge, so a
+            # dropdown growing downward from there had nowhere to go and
+            # got clipped by the window itself. Growing upward into the
+            # (much larger) output area actually has room to work with.
+            self._ac_listbox.place(in_=entry, x=0, rely=0.0, anchor="sw",
+                                   width=entry.winfo_width())
+            self._ac_listbox.lift()
+            self._ac_visible = True
+
+        def _update_autocomplete(event=None):
+            # Down/Up/Tab/Return/Escape also fire a generic KeyRelease —
+            # without this guard, navigating the list with arrow keys would
+            # immediately re-filter and snap the selection back to the top,
+            # since the text itself hasn't changed but this handler would
+            # still run and rebuild the list from scratch.
+            if event is not None and event.keysym in ("Down","Up","Tab","Return","Escape"):
+                return
+            text = self.v_cmd.get().strip().lower()
+            if not text:
+                _hide_autocomplete()
+                return
+            matches = [c for c in CONSOLE_COMMANDS if c.startswith(text)][:8]
+            if matches and matches != [text]:
+                _show_autocomplete(matches)
+            else:
+                _hide_autocomplete()
+
+        def _accept_selected(event=None):
+            if not self._ac_visible:
+                return None
+            sel = self._ac_listbox.curselection()
+            idx = sel[0] if sel else 0
+            if 0 <= idx < len(self._ac_matches):
+                self.v_cmd.set(self._ac_matches[idx] + " ")
+                entry.icursor("end")
+            _hide_autocomplete()
+            return "break"
+
+        def _move_selection(delta):
+            if not self._ac_visible:
+                return
+            sel = self._ac_listbox.curselection()
+            idx = sel[0] if sel else 0
+            idx = max(0, min(len(self._ac_matches)-1, idx+delta))
+            self._ac_listbox.selection_clear(0, "end")
+            self._ac_listbox.selection_set(idx)
+            self._ac_listbox.activate(idx)
+            self._ac_listbox.see(idx)
+
+        def _on_return(event=None):
+            if self._ac_visible:
+                return _accept_selected()
+            self._send()
+            return None
+
+        def _on_listbox_click(event=None):
+            _accept_selected()
+            entry.focus_set()
+
+        entry.bind("<KeyRelease>", _update_autocomplete)
+        entry.bind("<Return>", _on_return)
+        entry.bind("<Tab>", _accept_selected)
+        entry.bind("<Down>", lambda e: (_move_selection(1), "break")[1])
+        entry.bind("<Up>", lambda e: (_move_selection(-1), "break")[1])
+        entry.bind("<Escape>", lambda e: _hide_autocomplete())
+        self._ac_listbox.bind("<ButtonRelease-1>", _on_listbox_click)
+        self._hide_autocomplete = _hide_autocomplete
 
     def _append(self, text, tag=""):
         self.out.config(state="normal")
@@ -1020,6 +1495,195 @@ class ConsoleWindow(tk.Toplevel):
         self.destroy()
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  TICKETS WINDOW  (server owner's view — all tickets across all players)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TicketsWindow(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Support Tickets")
+        self.configure(bg=BG)
+        self.geometry("780x600")
+        self.resizable(True, True)
+        _set_window_icon(self)
+        ttk.Style().theme_use("clam")
+        self._tickets = []
+        self._visible = []
+        self._selected_ticket = None
+        self._build()
+        self._refresh()
+        _enable_dark_titlebar(self)
+        # Same reasoning as the main launcher windows — start at exactly
+        # what the fully-built layout needs, then set that as the floor,
+        # so shrinking the window can never clip the Comment/Resolve row.
+        self.update_idletasks()
+        fit_w = max(780, self.winfo_reqwidth())
+        fit_h = max(600, self.winfo_reqheight())
+        self.geometry(f"{fit_w}x{fit_h}")
+        self.minsize(fit_w, fit_h)
+
+    def _build(self):
+        h = tk.Frame(self, bg=SURF, height=44)
+        h.pack(fill="x"); h.pack_propagate(False)
+        tk.Label(h, text="🎫  Support Tickets", bg=SURF, fg=AMBER,
+                 font=("Georgia",12,"bold")).pack(side="left", padx=16, pady=8)
+        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+
+        sf = tk.Frame(self, bg=BG)
+        sf.pack(fill="x", padx=16, pady=(10,6))
+        tk.Label(sf, text="🔍", bg=BG, fg=MUTED, font=("Segoe UI",10)).pack(side="left")
+        self.v_filter = tk.StringVar()
+        self.v_filter.trace_add("write", lambda *_: self._populate())
+        tk.Entry(sf, textvariable=self.v_filter, bg=SURF, fg=PARCH,
+                 insertbackground=AMBER, relief="flat", font=("Consolas",10),
+                 bd=6).pack(side="left", fill="x", expand=True, padx=(6,0))
+        _hint_lbl = tk.Label(sf, text="filters by title or username", bg=BG, fg=MUTED,
+                             font=("Segoe UI",8))
+        _hint_lbl.pack(side="left", padx=(8,10))
+        self.v_show_closed = tk.BooleanVar(value=False)
+        tk.Checkbutton(sf, text="Show closed too", variable=self.v_show_closed,
+                       command=self._populate, bg=BG, fg=MUTED, selectcolor=SURF,
+                       activebackground=BG, activeforeground=AMBER,
+                       font=("Segoe UI",9)).pack(side="left")
+
+        body = tk.Frame(self, bg=BG)
+        body.pack(fill="both", expand=True, padx=16, pady=(0,10))
+
+        left = tk.Frame(body, bg=BG)
+        left.pack(side="left", fill="both", expand=True)
+        self.tree = _mk_tree(left, ("title","username","status","updated"),
+                            [220,120,70,120], height=16)
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        right = tk.Frame(body, bg=SURF, highlightbackground=BORDER,
+                         highlightthickness=1, width=300, height=480)
+        right.pack(side="left", fill="y", padx=(10,0))
+        right.pack_propagate(False)
+
+        self.v_detail_title = tk.StringVar(value="Select a ticket")
+        tk.Label(right, textvariable=self.v_detail_title, bg=SURF, fg=AMBER,
+                 font=("Georgia",10,"bold"), wraplength=280, justify="left"
+                 ).pack(anchor="w", padx=10, pady=(10,4))
+
+        thread_frame = tk.Frame(right, bg=BG)
+        thread_frame.pack(fill="both", expand=True, padx=10, pady=(0,6))
+        self.thread_text = tk.Text(thread_frame, bg=SURF2, fg=PARCH, relief="flat",
+                                   bd=0, wrap="word", state="disabled",
+                                   font=("Segoe UI",9))
+        tsb = _mk_scrollbar(thread_frame, self.thread_text.yview)
+        tsb.pack(side="right", fill="y")
+        self.thread_text.config(yscrollcommand=tsb.set)
+        self.thread_text.pack(side="left", fill="both", expand=True)
+        self.thread_text.tag_config("player", foreground=CYAN)
+        self.thread_text.tag_config("owner", foreground=AMBER)
+        self.thread_text.tag_config("meta", foreground=MUTED)
+
+        self.v_comment = tk.StringVar()
+        tk.Entry(right, textvariable=self.v_comment, bg=SURF, fg=PARCH,
+                 insertbackground=AMBER, relief="flat", font=("Consolas",9),
+                 bd=6).pack(fill="x", padx=10, pady=(0,6))
+
+        btn_row = tk.Frame(right, bg=SURF)
+        btn_row.pack(fill="x", padx=10, pady=(0,10))
+        _btn(btn_row, "💬 Comment", self._add_comment, font=("Segoe UI",9),
+             pady=6, padx=8).pack(side="left")
+        _btn(btn_row, "✔ Resolve", self._resolve_ticket, "success",
+             font=("Segoe UI",9), pady=6, padx=8).pack(side="left", padx=(6,0))
+
+        br = tk.Frame(self, bg=BG)
+        br.pack(fill="x", padx=16, pady=(0,12))
+        _btn(br, "⟳ Refresh", self._refresh, font=("Segoe UI",9),
+             pady=6, padx=12).pack(side="left")
+
+    def _refresh(self):
+        self._tickets = _load_tickets()["tickets"]
+        self._populate()
+
+    def _populate(self):
+        for r in self.tree.get_children(): self.tree.delete(r)
+        query = self.v_filter.get().strip().lower()
+        show_closed = self.v_show_closed.get()
+        visible = []
+        for t in sorted(self._tickets, key=lambda t: t["updated_at"], reverse=True):
+            if not show_closed and t["status"] != "open":
+                continue
+            if query and query not in t["title"].lower() and query not in t["username"].lower():
+                continue
+            visible.append(t)
+        self._visible = visible
+        for t in visible:
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(t["updated_at"]))
+            self.tree.insert("", "end", iid=t["ticket_id"],
+                             values=(t["title"], t["username"], t["status"], ts))
+
+    def _on_select(self, _=None):
+        sel = self.tree.selection()
+        if not sel: return
+        t = next((x for x in self._visible if x["ticket_id"] == sel[0]), None)
+        if not t: return
+        self._selected_ticket = t
+        self.v_detail_title.set(f"{t['title']}  ({t['status']})")
+        self.thread_text.config(state="normal")
+        self.thread_text.delete("1.0", "end")
+        header = f"From: {t['username']}"
+        if t.get("server"):
+            header += f"  ·  Server: {t['server']}"
+        self.thread_text.insert("end", header + "\n", "meta")
+        self.thread_text.insert("end", t["description"] + "\n\n")
+        for c in t.get("comments", []):
+            who = "You" if c["from"] == "owner" else t["username"]
+            tag = "owner" if c["from"] == "owner" else "player"
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(c["at"]))
+            self.thread_text.insert("end", f"[{ts}] {who}: ", tag)
+            self.thread_text.insert("end", f"{c['message']}\n")
+        self.thread_text.see("end")
+        self.thread_text.config(state="disabled")
+
+    def _selected_id(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("No selection", "Select a ticket first.", parent=self)
+            return None
+        return sel[0]
+
+    def _add_comment(self):
+        tid = self._selected_id()
+        if not tid: return
+        msg = self.v_comment.get().strip()[:TICKET_MESSAGE_MAX_LEN]
+        if not msg: return
+        with _tickets_lock:
+            data = _load_tickets()
+            for t in data["tickets"]:
+                if t["ticket_id"] == tid:
+                    t["comments"].append({"from":"owner","message":msg,"at":time.time()})
+                    t["updated_at"] = time.time()
+                    break
+            _save_tickets(data)
+        self.v_comment.set("")
+        self._refresh()
+        if self.tree.exists(tid):
+            self.tree.selection_set(tid)
+        self._on_select()
+
+    def _resolve_ticket(self):
+        tid = self._selected_id()
+        if not tid: return
+        if not messagebox.askyesno("Resolve Ticket",
+                "Mark this ticket as resolved? The player will see it as closed "
+                "the next time they open their ticket list.", parent=self):
+            return
+        with _tickets_lock:
+            data = _load_tickets()
+            for t in data["tickets"]:
+                if t["ticket_id"] == tid:
+                    t["status"]     = "closed"
+                    t["closed_by"]  = "owner"
+                    t["updated_at"] = time.time()
+                    break
+            _save_tickets(data)
+        self._refresh()
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  PLAYER MANAGER WINDOW
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1088,6 +1752,8 @@ class PlayerManagerWindow(tk.Toplevel):
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=6)
         _btn(br, "♻ Reset All Tokens", self._reset_all_tokens, "danger",
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=6)
+        _btn(br, "🎭 Edit Roles",     self._edit_roles,
+             font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=6)
         _btn(br, "👢 Kick",          self._kick_player, "danger",
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
         _btn(br, "🚫 Kick & Ban",    self._kick_ban,    "danger",
@@ -1106,7 +1772,10 @@ class PlayerManagerWindow(tk.Toplevel):
         sel = self.p_tree.selection()
         if not sel: return
         entry = _load_users().get(sel[0],{})
-        self.p_detail.set(f"Username: {sel[0]}    User ID: {entry.get('user_id','?')}")
+        roles = entry.get("roles", [])
+        roles_text = ", ".join(roles) if roles else "—"
+        self.p_detail.set(f"Username: {sel[0]}    User ID: {entry.get('user_id','?')}\n"
+                          f"Roles: {roles_text}")
 
     def _selected_username(self):
         sel = self.p_tree.selection()
@@ -1212,6 +1881,87 @@ class PlayerManagerWindow(tk.Toplevel):
         messagebox.showinfo("All Tokens Reset",
             f"Cleared tokens for {count} user(s).\n"
             "The next login for each username will be accepted automatically.")
+
+    def _edit_roles(self):
+        uname = self._selected_username()
+        if not uname: return
+        users = _load_users()
+        entry = users.get(uname, {})
+        roles = list(entry.get("roles", []))
+
+        win = tk.Toplevel(self)
+        win.title(f"Roles — {uname}")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        _set_window_icon(win)
+
+        tk.Label(win, text=f"Roles for '{uname}'", bg=BG, fg=AMBER,
+                 font=("Georgia",11,"bold")).pack(anchor="w", padx=16, pady=(14,2))
+        tk.Label(win, text="These are plain text tags TavernLib can read and act on — "
+                            "e.g. assigning in-game admin/moderator status based on what's "
+                            "listed here. This launcher just stores the list.",
+                 bg=BG, fg=MUTED, font=("Segoe UI",8), wraplength=300,
+                 justify="left").pack(anchor="w", padx=16, pady=(0,8))
+
+        list_frame = tk.Frame(win, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        list_frame.pack(fill="both", expand=True, padx=16, pady=(0,8))
+        lb = tk.Listbox(list_frame, bg=SURF, fg=PARCH, selectbackground=AMBERDIM,
+                        selectforeground="#ffd080", relief="flat", height=6,
+                        font=("Consolas",10), highlightthickness=0, bd=0)
+        lb.pack(fill="both", expand=True, padx=2, pady=2)
+        for r in roles:
+            lb.insert("end", r)
+
+        add_row = tk.Frame(win, bg=BG)
+        add_row.pack(fill="x", padx=16, pady=(0,8))
+        v_new_role = tk.StringVar()
+        entry_widget = tk.Entry(add_row, textvariable=v_new_role, bg=SURF, fg=PARCH,
+                 insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6)
+        entry_widget.pack(side="left", fill="x", expand=True)
+
+        def _add_role(event=None):
+            val = v_new_role.get().strip()
+            if not val: return
+            if val in lb.get(0, "end"):
+                messagebox.showinfo("Already added", f"'{val}' is already in the list.", parent=win)
+                return
+            lb.insert("end", val)
+            v_new_role.set("")
+
+        entry_widget.bind("<Return>", _add_role)
+        _btn(add_row, "+ Add", _add_role, font=("Segoe UI",9),
+             pady=6, padx=10).pack(side="left", padx=(6,0))
+
+        def _remove_role():
+            sel = lb.curselection()
+            if not sel: return
+            lb.delete(sel[0])
+
+        _btn(win, "− Remove Selected", _remove_role, "danger",
+             font=("Segoe UI",9), pady=6, padx=10).pack(anchor="w", padx=16, pady=(0,4))
+
+        def _save_roles():
+            new_roles = list(lb.get(0, "end"))
+            with _users_lock:
+                u = _load_users()
+                if uname in u:
+                    u[uname]["roles"] = new_roles
+                    _save_users(u)
+            win.destroy()
+            self._refresh_players()
+            if self.p_tree.exists(uname):
+                self.p_tree.selection_set(uname)
+            self._on_player_select()
+
+        tk.Frame(win, bg=BORDER, height=1).pack(fill="x", padx=16, pady=(8,6))
+        _btn(win, "💾 Save Roles", _save_roles, "primary",
+             font=("Georgia",10,"bold"), pady=10).pack(fill="x", padx=16, pady=(0,14))
+
+        win.update_idletasks()
+        win.geometry(f"340x{win.winfo_reqheight()}")
+        _enable_dark_titlebar(win)
+        win.transient(self)
+        win.grab_set()
 
     def _open_saves(self):
         try: os.makedirs(PLAYERS_SAVE, exist_ok=True); os.startfile(PLAYERS_SAVE)
@@ -2367,6 +3117,7 @@ class ServerLauncher(tk.Tk):
         self._mods_win = None
         self._sett_win = None
         self._console_win = None
+        self._tickets_win = None
         self._community_registered = False
         self._community_stop = threading.Event()
         self._community_thread = None
@@ -2423,6 +3174,8 @@ class ServerLauncher(tk.Tk):
         _btn(tr, "⚙ Settings", self._open_settings, font=("Segoe UI",9),
              pady=7, padx=12).pack(side="left")
         _btn(tr, "👤 Players",  self._open_manager,  font=("Segoe UI",9),
+             pady=7, padx=12).pack(side="left", padx=6)
+        _btn(tr, "🎫 Tickets",  self._open_tickets,  font=("Segoe UI",9),
              pady=7, padx=12).pack(side="left", padx=6)
         _btn(tr, "🖥 Console",  self._open_console,  font=("Segoe UI",9),
              pady=7, padx=12).pack(side="left", padx=6)
@@ -2642,6 +3395,11 @@ class ServerLauncher(tk.Tk):
         if self._mgr_win and self._mgr_win.winfo_exists():
             self._mgr_win.lift(); return
         self._mgr_win = PlayerManagerWindow(self)
+
+    def _open_tickets(self):
+        if self._tickets_win and self._tickets_win.winfo_exists():
+            self._tickets_win.lift(); return
+        self._tickets_win = TicketsWindow(self)
 
     def _open_console(self):
         if self._console_win and self._console_win.winfo_exists():
