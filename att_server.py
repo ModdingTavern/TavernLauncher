@@ -4,7 +4,7 @@ The Modding Tavern — Server Launcher
 
 # Bump this with every release you publish to
 # github.com/ModdingTavern/TavernLauncher/releases (tag it vX.Y.Z to match).
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.8.0"
 
 # The subfolder this app occupies inside the release zip
 # (TavernLauncher-vX.Y.Z.zip contains /Client and /Server side by side) —
