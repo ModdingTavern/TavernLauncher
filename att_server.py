@@ -4,14 +4,14 @@ The Modding Tavern — Server Launcher
 
 # Bump this with every release you publish to
 # github.com/ModdingTavern/TavernLauncher/releases (tag it vX.Y.Z to match).
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 # The subfolder this app occupies inside the release zip
 # (TavernLauncher-vX.Y.Z.zip contains /Client and /Server side by side) —
 # used by the self-updater to know which part of the zip is "ours".
 UPDATE_APP_FOLDER = "Server"
 
-import sys, os, subprocess, threading, time, csv, io, json, socket, hashlib, secrets, webbrowser
+import sys, os, subprocess, threading, time, csv, io, json, socket, hashlib, secrets, webbrowser, re, unicodedata
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import base64, hmac as _hmac, tempfile, struct, ctypes, urllib.request, urllib.error, contextlib
@@ -172,11 +172,13 @@ def _is_valid_name(name):
     return all((c.isalnum() and c.isascii()) or c in USERNAME_EXTRA_CHARS
                for c in name)
 
-# Community server list backend — the small Flask app the server owner runs
-# at home (see community_server.py). Registration (POST) and unregistration
-# (DELETE) both go here; the same URL is used for GET on the client side.
-COMMUNITY_API = "http://themoddingtavern.com:1763/servers"
-COMMUNITY_HEARTBEAT_SECONDS = 120
+# Community server list — TavernLib now handles the actual registration
+# to themoddingtavern.com (this launcher used to POST/DELETE its own
+# heartbeat here directly; that's been retired in favor of TavernLib doing
+# it from inside the game process, which already has the auth context it
+# needs). The "community_listed" setting in server_settings.json still
+# lives here as the flag TavernLib reads to decide whether to register —
+# this launcher just no longer makes the network call itself.
 DISCORD_URL   = "https://discord.gg/jNQUUDAYSj"
 
 def load_cfg():
@@ -196,24 +198,58 @@ def save_cfg(d):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_server_settings():
-    try: return json.load(open(SERVER_CFG))
-    except: return {"name":"My Tavern Server","password_hash":"","whitelist_enabled":False}
+    """Every field here gets re-validated on every load, not just when the
+    Settings UI saves it — editing server_settings.json directly (or an
+    older version's schema, or plain corruption) would otherwise let an
+    invalid name/limit/hostname sail straight through to the live ping
+    response every connecting player sees, since that response is built
+    from whatever this returns. This isn't a defense against a server
+    owner tampering with their own launcher — they can always do that,
+    same as with any local software — it's about keeping this launcher
+    correct and consistent regardless of how the file got into a given
+    state, and about not handing a malformed value straight to other
+    people's screens just because it happened to sit unvalidated on disk."""
+    try:
+        ss = json.load(open(SERVER_CFG))
+    except Exception:
+        ss = {}
+    if not isinstance(ss, dict):
+        ss = {}
+
+    name = str(ss.get("name", "")).strip()
+    if not name or len(name) > SERVER_NAME_MAX_LEN or not _is_valid_name(name):
+        name = "My Tavern Server"
+    ss["name"] = name
+
+    try:
+        max_players = int(ss.get("max_players", 24))
+    except (TypeError, ValueError):
+        max_players = 24
+    ss["max_players"] = max(1, min(999, max_players))
+
+    ss["whitelist_enabled"] = bool(ss.get("whitelist_enabled", False))
+    ss["enforce_ip_limit"]  = bool(ss.get("enforce_ip_limit", True))
+    ss["community_listed"]  = bool(ss.get("community_listed", False))
+
+    # A hash is either a real 64-char SHA256 hex digest or empty (no
+    # password) — anything else can't be a value this launcher itself
+    # ever wrote, so treat it as "no password" rather than trying to use
+    # it as one.
+    pw_hash = str(ss.get("password_hash", "") or "")
+    if pw_hash and not re.fullmatch(r"[0-9a-f]{64}", pw_hash):
+        pw_hash = ""
+    ss["password_hash"] = pw_hash
+
+    hostname = str(ss.get("public_hostname", "")).strip().lower().rstrip(".")
+    if hostname and not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+", hostname):
+        hostname = ""
+    ss["public_hostname"] = hostname
+
+    return ss
 
 def save_server_settings(d):
     try: json.dump(d,open(SERVER_CFG,"w"),indent=2)
     except: pass
-
-def _get_or_create_listing_token():
-    """A stable secret identifying *this* server's row on the community list,
-    so heartbeats/updates/unregisters always target the right listing even
-    across restarts or a dynamic IP change."""
-    ss = load_server_settings()
-    tok = ss.get("community_listing_token")
-    if not tok:
-        tok = secrets.token_urlsafe(24)
-        ss["community_listing_token"] = tok
-        save_server_settings(ss)
-    return tok
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  USER DB / BLACKLIST / WHITELIST  (all three live in USERS_FILE together)
@@ -325,9 +361,12 @@ def _save_wl(d):
         full = _load_all_data(); full["whitelist"] = d; _save_all_data(full)
 
 def _is_blacklisted(username, user_id, ip):
+    # user_id is no longer checked here — blacklisting by UID never made
+    # much sense to begin with, since a banned player could just get a new
+    # one by registering under a different username. Kept as a parameter
+    # for call-site compatibility, just unused now.
     bl = _load_bl()
     if username and username.lower() in [u.lower() for u in bl["usernames"]]: return True
-    if user_id is not None and user_id in bl["user_ids"]: return True
     if ip and ip in bl["ips"]: return True
     return False
 
@@ -511,6 +550,21 @@ TICKET_MESSAGE_MAX_LEN  = 1000
 TICKET_MAX_ACTIVE_PER_USER      = 3
 TICKET_CREATE_COOLDOWN_SECONDS  = 60
 
+def _clean_ticket_text(s, max_len):
+    """Strips control/formatting characters (a stray bidi override, embedded
+    nulls/escapes, etc.) before truncating to max_len. Same reasoning as the
+    community list's name filtering — this text gets rendered back out
+    verbatim in a Tkinter Text widget on the server owner's screen (and, for
+    a reply, the original player's screen too), so it's worth cleaning
+    rather than trusting it's already well-formed just because it came
+    through the normal ticket flow. Unlike the community list's name check,
+    this strips rather than rejects outright — a stressed player submitting
+    a support ticket shouldn't get bounced over an invisible paste artifact
+    they didn't even know was there."""
+    s = str(s)[:max_len * 2]  # a generous pre-truncate so a huge string can't make this slow
+    cleaned = "".join(c for c in s if not unicodedata.category(c).startswith("C") or c in "\n\t")
+    return cleaned.strip()[:max_len]
+
 def _load_tickets():
     with _tickets_lock:
         try:
@@ -538,6 +592,8 @@ def _handle_ticket_request(req, ip, log_fn):
 
     if not username or not token:
         return {"status":"error","message":"Missing credentials."}
+    if len(token) > 128 or len(username) > USERNAME_MAX_LEN:
+        return {"status":"error","message":"Invalid credentials."}
 
     users = _load_users()
     entry = users.get(username.lower())
@@ -559,9 +615,9 @@ def _handle_ticket_request(req, ip, log_fn):
     return {"status":"error","message":"Unknown ticket action."}
 
 def _ticket_create(username, req):
-    title       = str(req.get("title","")).strip()[:TICKET_TITLE_MAX_LEN]
-    description = str(req.get("description","")).strip()[:TICKET_DESC_MAX_LEN]
-    server      = str(req.get("server","")).strip()[:120]
+    title       = _clean_ticket_text(req.get("title",""), TICKET_TITLE_MAX_LEN)
+    description = _clean_ticket_text(req.get("description",""), TICKET_DESC_MAX_LEN)
+    server      = _clean_ticket_text(req.get("server",""), 120)
     if not title or not description:
         return {"status":"error","message":"Title and description are required."}
 
@@ -607,7 +663,7 @@ def _ticket_list_mine(username):
 
 def _ticket_respond(username, req):
     ticket_id = str(req.get("ticket_id","")).strip()
-    message   = str(req.get("message","")).strip()[:TICKET_MESSAGE_MAX_LEN]
+    message   = _clean_ticket_text(req.get("message",""), TICKET_MESSAGE_MAX_LEN)
     if not ticket_id or not message:
         return {"status":"error","message":"Missing ticket_id or message."}
     with _tickets_lock:
@@ -626,7 +682,7 @@ def _ticket_respond(username, req):
 
 def _ticket_close(username, req):
     ticket_id = str(req.get("ticket_id","")).strip()
-    message   = str(req.get("message","")).strip()[:TICKET_MESSAGE_MAX_LEN]
+    message   = _clean_ticket_text(req.get("message",""), TICKET_MESSAGE_MAX_LEN)
     if not ticket_id:
         return {"status":"error","message":"Missing ticket_id."}
     with _tickets_lock:
@@ -691,6 +747,21 @@ def _handle_auth(conn, addr, log_fn):
 
         if not username or not token:
             conn.sendall(json.dumps({"status":"error","message":"Missing credentials."}).encode())
+            return
+
+        # A real token is secrets.token_urlsafe(18) (~24 chars) and a real
+        # password field is a SHA256 hex digest (exactly 64 chars) — anything
+        # wildly longer than that can't be legitimate, and rejecting it here
+        # means an oversized value never gets as far as being persisted into
+        # users.json (bounding what disk space a bypassed/modified client can
+        # bloat by hammering registration with huge junk tokens).
+        if len(token) > 128:
+            log_fn(f"Blocked (token too long) from {ip}", "warn")
+            conn.sendall(json.dumps({"status":"error","message":"Invalid token."}).encode())
+            return
+        if len(pw_hash) > 128:
+            log_fn(f"Blocked (password field too long) from {ip}", "warn")
+            conn.sendall(json.dumps({"status":"error","message":"Invalid password."}).encode())
             return
 
         if len(username) > USERNAME_MAX_LEN:
@@ -1052,218 +1123,308 @@ def _mk_tree(parent, cols, widths, height=8):
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONSOLE COMMANDS  (for autocomplete in ConsoleWindow)
 # ══════════════════════════════════════════════════════════════════════════════
-# Extracted from the community command reference doc. Not guaranteed to be
-# 100% exhaustive or perfectly current with every game version, but covers
-# the documented set well enough to be a genuinely useful autocomplete —
-# same idea as any professional console/CLI tool offering completions
+# Extracted from the community command reference doc — command -> list of
+# parameter names it expects, in order. Not guaranteed to be 100% exhaustive
+# or perfectly current with every game version, but covers the documented
+# set well enough to be a genuinely useful autocomplete — same idea as any
+# professional console/CLI tool offering completions (with argument hints)
 # against a known command list.
-CONSOLE_COMMANDS = [
-    "agents print",
-    "audio microphone",
-    "debug count",
-    "debug count-all",
-    "debug count-behaviours",
-    "debug count-scripts",
-    "debug entities",
-    "debug entity-health",
-    "debug export-navmesh",
-    "debug fixedtime",
-    "debug lag",
-    "debug load-marker",
-    "debug nameid",
-    "debug open-logs",
-    "debug prefabcounts",
-    "debug print-names",
-    "debug remote-console",
-    "debug server-stats",
-    "debug set",
-    "debug static",
-    "debug tracking",
-    "debug turabada-ai",
-    "festivities info",
-    "festivities list",
-    "festivities start",
-    "festivities stop",
-    "game connect",
-    "game connect-player",
-    "game create-server",
-    "game delete-save",
-    "game find",
-    "game ip-local",
-    "game join-ip",
-    "game join-server",
-    "game list-recent",
-    "game local-test",
-    "game local-test-scene",
-    "game show-all",
-    "game show-discover",
-    "game show-online",
-    "game show-open",
-    "game show-owned",
-    "game show-public",
-    "game start-local",
-    "game start-server",
-    "game startclean",
-    "game stop-mode",
-    "global-population list",
-    "global-population set-size",
-    "global-population spawned",
-    "global-population teleport",
-    "global-population teleport-to",
-    "help",
-    "help full",
-    "help modules",
-    "help search",
-    "impacts sync",
-    "info",
-    "info cli",
-    "info player-mode",
-    "info server",
-    "info system",
-    "info user",
-    "info version",
-    "landmarks enable",
-    "landmarks load-enabled",
-    "leaderboard create",
-    "leaderboard get-rank",
-    "leaderboard list",
-    "leaderboard remove-checkpoint",
-    "leaderboard set-board",
-    "leaderboard set-checkpoint",
-    "login",
-    "logout",
-    "logs",
-    "logs change-target",
-    "logs config",
-    "logs destroy-trace",
-    "logs warn-stack",
-    "maintenance garbage",
-    "maintenance resources",
-    "microtutorial active",
-    "microtutorial exit",
-    "microtutorial list",
-    "microtutorial next-step",
-    "microtutorial set-log-level",
-    "microtutorial start",
-    "mods",
-    "mods add",
-    "mods path",
-    "mods refresh",
-    "mods remove",
-    "mods restart",
-    "mods start",
-    "mods stop",
-    "profiling cleanslatememory",
-    "profiling dumpsize",
-    "profiling heapdump",
-    "profiling memorydump",
-    "profiling sample",
-    "progress fill-book",
-    "progress fill-books",
-    "progress fillcaveteleporter",
-    "progress fillcommunityboxes",
-    "progress finishboxes",
-    "progress forgeall",
-    "progress generatecaves",
-    "progress list-books",
-    "progress listcaveteleporter",
-    "progress repaircaveteleporters",
-    "progression allxp",
-    "progression buyskill",
-    "progression checkallxp",
-    "progression clearall",
-    "progression clearpath",
-    "progression list",
-    "progression offlinelevels",
-    "progression pathlevelup",
-    "progression pathxp",
-    "progression printofflinelevels",
-    "progression showskills",
-    "quality dynamic-load-multiplier",
-    "quality lod-bias",
-    "quality static-load-multiplier",
-    "quit",
-    "recent-players test-record",
-    "repair-box",
-    "repair-box list-items",
-    "repeat",
-    "repeat last",
-    "repeat stop",
-    "repeat stopall",
-    "report-players create",
-    "report-players list",
-    "select",
-    "select destroy",
-    "select find",
-    "select get",
-    "select look-at",
-    "select move",
-    "select prefab",
-    "select rotate",
-    "select snap-ground",
-    "select snap-to",
-    "select tostring",
-    "select unselect",
-    "server migrate",
-    "server start",
-    "settings changesetting",
-    "settings disable-board",
-    "settings enable-board",
-    "settings heat",
-    "settings infoboard",
-    "settings infoboard-list",
-    "settings list",
-    "settings population",
-    "settings possible",
-    "settings reset",
-    "settings save",
-    "settings settoggle",
-    "settings toggle",
-    "social addfriend",
-    "social listfriends",
-    "social removefriend",
-    "spawn",
-    "spawn exact",
-    "spawn find",
-    "spawn infodump",
-    "spawn list",
-    "spawn local",
-    "spawn moulds",
-    "spawn multi",
-    "spawn package",
-    "spawn pages",
-    "spawn population",
-    "spawn population-list",
-    "spawn string",
-    "spawn string-raw",
-    "time",
-    "time future",
-    "time keywords",
-    "time ofday",
-    "time set",
-    "time toggle",
-    "trade atm",
-    "trade empty",
-    "trade post",
-    "trade post-string",
-    "trial list",
-    "trial players",
-    "trial progress",
-    "trial reset",
-    "users statistics",
-    "wacky chisel-deck",
-    "wacky destroy",
-    "wacky inputscale",
-    "wacky marcopolo",
-    "wacky replace",
-    "wacky replace-selected",
-    "wacky setvolume",
-    "websocket subscribe",
-    "websocket subscriptions",
-    "websocket unsubscribe",
-    "world caves",
-    "world forest",
-]
+CONSOLE_COMMANDS = {
+    "agents print": [],
+    "audio microphone mute": [],
+    "audio microphone unmute": [],
+    "chunks check-wipe": [],
+    "chunks entities": ["chunk"],
+    "chunks force-load": ["chunk", "isForceLoaded"],
+    "chunks info": ["chunk"],
+    "chunks loadall": ["loaded"],
+    "chunks merge": ["prefabHashes"],
+    "chunks print-all": [],
+    "chunks print-loaded": [],
+    "chunks set-load": ["loadDistance", "unloadDistance"],
+    "chunks set-receive-count": ["receiveAmount"],
+    "chunks set-receive-ms": ["receiveDuration"],
+    "chunks set-static-load": ["isLoading"],
+    "chunks set-static-per-frame": ["numberToLoadPerFrame"],
+    "chunks set-static-sequence": ["loadSequentially"],
+    "chunks set-sync-amount": ["syncAmount"],
+    "chunks set-sync-interval": ["interval"],
+    "chunks set-timed": ["processingPercent", "maxAllowance", "minNeeded"],
+    "chunks wipe": ["chunk"],
+    "debug count": ["prefab"],
+    "debug count-all": [],
+    "debug count-behaviours": ["behaviourName", "isEnabled"],
+    "debug count-scripts": ["typeName", "isCountingResources", "isFindingChildren"],
+    "debug entities": [],
+    "debug entity-health": [],
+    "debug export-navmesh": ["output"],
+    "debug fixedtime": [],
+    "debug lag": ["targetFPS"],
+    "debug load-marker": ["player"],
+    "debug nameid": ["id"],
+    "debug open-logs": [],
+    "debug prefabcounts": [],
+    "debug print-names": ["scriptName"],
+    "debug remote-console": [],
+    "debug server-stats": [],
+    "debug set": ["player", "index"],
+    "debug static check-current": [],
+    "debug static fix": ["hashes"],
+    "debug static list": [],
+    "debug static modify": ["hash", "state"],
+    "debug tracking get": ["name"],
+    "debug tracking remove": ["name"],
+    "debug tracking track": ["entityId", "name"],
+    "debug turabada-ai": [],
+    "festivities info": ["festivity"],
+    "festivities list": [],
+    "festivities start": ["festivity"],
+    "festivities stop": ["festivity"],
+    "game connect": ["serverIdentifier", "playerMode"],
+    "game connect-player": ["player", "playerMode"],
+    "game create-server": ["serverName", "sceneIndex", "region"],
+    "game delete-save": ["serverIdentifier"],
+    "game find": ["name"],
+    "game ip-local": ["sceneIndex", "playerMode", "port"],
+    "game join-ip": ["serverIp", "sceneIndex", "playerMode", "port"],
+    "game join-server": ["serverIdentifier", "playerMode"],
+    "game list-recent": [],
+    "game local-test": ["serverIdentifier", "playerMode"],
+    "game local-test-scene": ["scene", "playerMode"],
+    "game show-all": [],
+    "game show-discover": [],
+    "game show-online": [],
+    "game show-open": [],
+    "game show-owned": [],
+    "game show-public": [],
+    "game start-local": ["sceneIndex", "isExternalLaunch", "port", "isHeadless", "isRunningLocally"],
+    "game start-server": ["server", "isExternalLaunch", "port", "isHeadless", "isRunningLocally"],
+    "game startclean": ["server", "isExternalLaunch", "port", "isHeadless", "isRunningLocally"],
+    "game stop-mode": [],
+    "global-population list": [],
+    "global-population set-size": ["population", "maxSpawned"],
+    "global-population spawned": ["population"],
+    "global-population teleport": ["player", "population", "distanceAway"],
+    "global-population teleport-to": ["player", "population", "index", "distanceAway"],
+    "help": ["path"],
+    "help full": ["path"],
+    "help modules": [],
+    "help search": ["searchString"],
+    "impacts sync": ["isSubscribing"],
+    "info": [],
+    "info cli": [],
+    "info player-mode": [],
+    "info server": [],
+    "info system": [],
+    "info user": [],
+    "info version": [],
+    "landmarks enable": ["enabled"],
+    "landmarks load-enabled": ["isLoading"],
+    "leaderboard create": ["courseName", "isLowest"],
+    "leaderboard get-rank": ["courseName"],
+    "leaderboard list": [],
+    "leaderboard remove-checkpoint": ["courseName", "isBeginning"],
+    "leaderboard set-board": ["courseName"],
+    "leaderboard set-checkpoint": ["courseName", "isBeginning"],
+    "login": ["username", "password"],
+    "logout": [],
+    "logs": [],
+    "logs change-target": ["targetName", "minLevel", "maxLevel", "loggerNamePattern"],
+    "logs config": ["isPrintingAll"],
+    "logs destroy-trace": ["isEnabled"],
+    "logs warn-stack": ["isEnabled"],
+    "maintenance garbage": [],
+    "maintenance resources": [],
+    "microtutorial active": [],
+    "microtutorial exit": ["player"],
+    "microtutorial list": [],
+    "microtutorial next-step": ["player"],
+    "microtutorial set-log-level": ["level"],
+    "microtutorial start": ["player", "tutorialSettings"],
+    "mods": [],
+    "mods add": ["name", "content", "isOverride"],
+    "mods path": [],
+    "mods refresh": [],
+    "mods remove": ["name"],
+    "mods restart": ["name"],
+    "mods start": ["name"],
+    "mods stop": ["name"],
+    "player check-stat": ["player", "stat"],
+    "player count": [],
+    "player cripple": ["players"],
+    "player detailed": ["player"],
+    "player get-home": ["player"],
+    "player getdamagemulti": [],
+    "player god-mode": ["players", "isOn"],
+    "player id": ["username"],
+    "player inventory": ["players"],
+    "player inventory load": ["user", "save"],
+    "player inventory save": ["user"],
+    "player kick": ["players", "reason"],
+    "player kill": ["players"],
+    "player list": [],
+    "player list-detailed": [],
+    "player list-stats": ["player"],
+    "player message": ["players", "message", "duration"],
+    "player modify-stat": ["players", "statDefinition", "valueModifier", "duration", "isMultiplier"],
+    "player progression allxp": ["players", "xp"],
+    "player progression buyskill": ["slotIndex", "isConsumingExperience"],
+    "player progression checkallxp": ["players"],
+    "player progression clearall": ["players"],
+    "player progression clearpath": ["player", "path"],
+    "player progression list": [],
+    "player progression offlinelevels": ["userInfo", "path", "levels"],
+    "player progression pathlevelup": ["players", "path"],
+    "player progression pathxp": ["players", "path", "xp"],
+    "player progression printofflinelevels": [],
+    "player progression showskills": ["player"],
+    "player set-home": ["players", "home"],
+    "player set-stat": ["players", "statDefinition", "value", "applicationType"],
+    "player set-unlock": ["players", "unlock", "isUnlocked"],
+    "player setdamagemulti": ["multiplier"],
+    "player teleport": ["players", "target"],
+    "player unlock-cancel": ["player"],
+    "player unlock-check": ["player", "unlock"],
+    "player username": ["userId"],
+    "profiling cleanslatememory": ["name", "path"],
+    "profiling dumpsize": [],
+    "profiling heapdump": [],
+    "profiling memorydump": ["name", "path"],
+    "profiling sample": ["name", "path", "frames", "postAction"],
+    "progress fill-book": ["collection"],
+    "progress fill-books": [],
+    "progress fillcaveteleporter": ["layer", "fuelQuantity"],
+    "progress fillcommunityboxes": [],
+    "progress finishboxes": [],
+    "progress forgeall": [],
+    "progress generatecaves": ["layer", "debugCallback"],
+    "progress list-books": [],
+    "progress listcaveteleporter": [],
+    "progress repaircaveteleporters": ["layer"],
+    "quality dynamic-load-multiplier": ["loadMultiplier"],
+    "quality lod-bias": ["lodbias"],
+    "quality static-load-multiplier": ["loadMultiplier"],
+    "quit": [],
+    "recent-players test-record": ["name", "id", "interactionType"],
+    "repair-box": ["player", "item1", "count1", "item2", "count2", "item3", "count3", "output", "localSpawnPosition"],
+    "repair-box list-items": [],
+    "repeat": ["count", "intervalInSeconds", "isLoggingProgress"],
+    "repeat last": [],
+    "repeat stop": ["id"],
+    "repeat stopall": [],
+    "report-players create": ["userId", "type", "serverId"],
+    "report-players list": ["statusFilter", "serverFilter"],
+    "save": [],
+    "save backup": ["isInstant"],
+    "save full-wipe": [],
+    "save now": [],
+    "save player-wipe": ["user", "isWipingLockbox", "isWipingATM", "isWipingPostbox", "isWipingLandmarks", "isWipingMap"],
+    "save player-wipe-all": ["isWipingATM", "isWipingPostbox", "isWipingLandmarks", "isWipingMap"],
+    "save wipe": ["isSettingOffline"],
+    "save wipe-forced": ["keepPlayers"],
+    "save wipe-storage": [],
+    "save wipecache": ["isSettingOffline"],
+    "save wipecaves": [],
+    "select": ["identifier"],
+    "select destroy": [],
+    "select find": ["player", "distance"],
+    "select get": ["identifier"],
+    "select look-at": ["player", "isRotatingAllAxis"],
+    "select move back": ["amount"],
+    "select move down": ["amount"],
+    "select move exact": ["position"],
+    "select move forward": ["amount"],
+    "select move left": ["amount"],
+    "select move right": ["amount"],
+    "select move up": ["amount"],
+    "select prefab": ["prefab", "player"],
+    "select rotate exact": ["rotation"],
+    "select rotate pitch": ["degrees"],
+    "select rotate roll": ["degrees"],
+    "select rotate yaw": ["degrees"],
+    "select snap-ground": [],
+    "select snap-to": ["identifier"],
+    "select tostring": [],
+    "select unselect": [],
+    "server migrate": ["secondsLeftUntilTermination"],
+    "server proxy": ["serverId", "proxiedCommand"],
+    "server start": ["serverId", "isExternalLaunch", "port", "isHeadless", "isRunningLocally"],
+    "settings changesetting": ["settingsTarget", "setting", "value"],
+    "settings disable-board": [],
+    "settings enable-board": [],
+    "settings heat": ["multiplier"],
+    "settings infoboard": ["identifier", "value"],
+    "settings infoboard-list": [],
+    "settings list": ["settingsTarget"],
+    "settings population check-time": ["population"],
+    "settings population reset-time": ["population"],
+    "settings population set-time": ["population", "timeInSeconds"],
+    "settings possible": ["settingsTarget", "setting"],
+    "settings reset": [],
+    "settings save": [],
+    "settings settoggle": ["setting", "isOn"],
+    "settings toggle": ["setting"],
+    "social addfriend": ["player"],
+    "social listfriends": ["user"],
+    "social removefriend": ["player"],
+    "spawn": ["players", "prefab", "arguments"],
+    "spawn exact": ["position", "rotation", "prefab", "arguments"],
+    "spawn find": ["name"],
+    "spawn infodump": [],
+    "spawn list": [],
+    "spawn list materials": [],
+    "spawn local": ["prefab"],
+    "spawn moulds": ["players", "prefab"],
+    "spawn moulds list": [],
+    "spawn multi": ["players", "name", "args"],
+    "spawn package drop": ["players", "arguments"],
+    "spawn package list": [],
+    "spawn pages list": [],
+    "spawn pages spawn": ["players", "collection"],
+    "spawn population": ["player", "population", "populationType", "size", "startingPopulation", "maxPopulation"],
+    "spawn population-list": [],
+    "spawn string": ["players", "value"],
+    "spawn string-raw": ["value"],
+    "time": [],
+    "time future": ["progress", "measure"],
+    "time keywords": [],
+    "time ofday": ["isNormalised"],
+    "time set": ["time"],
+    "time toggle": [],
+    "trade atm add": ["user", "quantityToAdd"],
+    "trade atm get": ["user"],
+    "trade atm set": ["user", "quantity"],
+    "trade empty": [],
+    "trade post": ["user", "prefab", "arguments"],
+    "trade post-string": ["user", "value"],
+    "trial list": [],
+    "trial players": ["key"],
+    "trial progress": ["key"],
+    "trial reset": ["key"],
+    "users statistics": ["user"],
+    "wacky chisel-deck": [],
+    "wacky cleanplayerbody": ["player"],
+    "wacky cleanplayerstate": ["player"],
+    "wacky destroy": ["id"],
+    "wacky destroy-free": ["prefab", "chunks"],
+    "wacky destroyall": ["prefab"],
+    "wacky inputscale": ["scale"],
+    "wacky marcopolo": ["player"],
+    "wacky ow-loot": [],
+    "wacky replace": ["id"],
+    "wacky replace-selected": [],
+    "wacky setvolume": ["local", "remote"],
+    "wacky smelter": [],
+    "websocket subscribe": ["eventType"],
+    "websocket subscriptions": [],
+    "websocket unsubscribe": ["eventType"],
+    "world caves reset": [],
+    "world caves teleport": ["players", "layer"],
+    "world forest info": ["forest"],
+    "world forest list": [],
+    "world forest reset": ["forest"],
+    "world forest teleport": ["players", "forest", "nodeIndex"],
+}
 
 
 class ConsoleWindow(tk.Toplevel):
@@ -1319,36 +1480,52 @@ class ConsoleWindow(tk.Toplevel):
         # ── Command autocomplete ──────────────────────────────────────────────
         # A floating suggestion list under the entry, positioned via place(in_=)
         # so it overlays correctly regardless of the pack layout around it.
-        self._ac_listbox = tk.Listbox(self, bg=SURF2, fg=PARCH,
+        # Wrapped in its own frame (rather than placing the Listbox directly)
+        # so a real Scrollbar can sit alongside it — some command groups
+        # (e.g. "player") have 30+ matches for one prefix, far more than
+        # comfortably fit on screen at once, and without a scrollbar those
+        # extra matches would be completely unreachable by mouse, not just
+        # initially hidden.
+        self._ac_frame = tk.Frame(self, bg=SURF2, highlightbackground=BORDER,
+                                  highlightthickness=1)
+        self._ac_listbox = tk.Listbox(self._ac_frame, bg=SURF2, fg=PARCH,
                                       selectbackground=AMBERDIM, selectforeground="#ffd080",
-                                      relief="flat", bd=0, highlightthickness=1,
-                                      highlightbackground=BORDER, font=("Consolas",10),
-                                      activestyle="none")
+                                      relief="flat", bd=0, highlightthickness=0,
+                                      font=("Consolas",10), activestyle="none")
+        self._ac_scrollbar = _mk_scrollbar(self._ac_frame, self._ac_listbox.yview)
+        self._ac_scrollbar.pack(side="right", fill="y")
+        self._ac_listbox.config(yscrollcommand=self._ac_scrollbar.set)
+        self._ac_listbox.pack(side="left", fill="both", expand=True)
         self._ac_visible = False
         self._ac_matches = []
 
         def _hide_autocomplete():
             if self._ac_visible:
-                self._ac_listbox.place_forget()
+                self._ac_frame.place_forget()
                 self._ac_visible = False
 
         def _show_autocomplete(matches):
             self._ac_matches = matches
             self._ac_listbox.delete(0, "end")
             for m in matches:
-                self._ac_listbox.insert("end", m)
+                params = CONSOLE_COMMANDS.get(m, [])
+                display = f"{m}  [{', '.join(params)}]" if params else m
+                self._ac_listbox.insert("end", display)
             self._ac_listbox.selection_clear(0, "end")
             self._ac_listbox.selection_set(0)
-            self._ac_listbox.config(height=min(6, len(matches)))
+            # Only the VISIBLE row count is capped — matches itself already
+            # holds everything that matched, all of it reachable via the
+            # scrollbar or by continuing to type/arrow-key through it.
+            self._ac_listbox.config(height=min(8, len(matches)))
             # Anchored ABOVE the entry (its own bottom-left corner sits at
             # the entry's top-left), not below it — the entry sits right
             # above the Send button near the window's bottom edge, so a
             # dropdown growing downward from there had nowhere to go and
             # got clipped by the window itself. Growing upward into the
             # (much larger) output area actually has room to work with.
-            self._ac_listbox.place(in_=entry, x=0, rely=0.0, anchor="sw",
-                                   width=entry.winfo_width())
-            self._ac_listbox.lift()
+            self._ac_frame.place(in_=entry, x=0, rely=0.0, anchor="sw",
+                                 width=entry.winfo_width())
+            self._ac_frame.lift()
             self._ac_visible = True
 
         def _update_autocomplete(event=None):
@@ -1363,7 +1540,11 @@ class ConsoleWindow(tk.Toplevel):
             if not text:
                 _hide_autocomplete()
                 return
-            matches = [c for c in CONSOLE_COMMANDS if c.startswith(text)][:8]
+            # No practical cap here — with 294 total commands, even a broad
+            # prefix stays comfortably scrollable; truncating this list (as
+            # opposed to just the visible height above) is what silently
+            # hid real completions like "player kick" before.
+            matches = [c for c in CONSOLE_COMMANDS if c.startswith(text)]
             if matches and matches != [text]:
                 _show_autocomplete(matches)
             else:
@@ -1579,9 +1760,10 @@ class TicketsWindow(tk.Toplevel):
         self.thread_text.tag_config("meta", foreground=MUTED)
 
         self.v_comment = tk.StringVar()
-        tk.Entry(right, textvariable=self.v_comment, bg=SURF, fg=PARCH,
-                 insertbackground=AMBER, relief="flat", font=("Consolas",9),
-                 bd=6).pack(fill="x", padx=10, pady=(0,6))
+        tk.Entry(right, textvariable=self.v_comment, bg=SURF2, fg=PARCH,
+                 insertbackground=AMBER, relief="flat",
+                 highlightbackground=BORDER, highlightcolor=AMBER, highlightthickness=1,
+                 font=("Consolas",9), bd=6).pack(fill="x", padx=10, pady=(0,6))
 
         btn_row = tk.Frame(right, bg=SURF)
         btn_row.pack(fill="x", padx=10, pady=(0,10))
@@ -1649,7 +1831,7 @@ class TicketsWindow(tk.Toplevel):
     def _add_comment(self):
         tid = self._selected_id()
         if not tid: return
-        msg = self.v_comment.get().strip()[:TICKET_MESSAGE_MAX_LEN]
+        msg = _clean_ticket_text(self.v_comment.get(), TICKET_MESSAGE_MAX_LEN)
         if not msg: return
         with _tickets_lock:
             data = _load_tickets()
@@ -1725,7 +1907,7 @@ class PlayerManagerWindow(tk.Toplevel):
         nb.add(bl_tab, text="  Blacklist  ")
         nb.add(wl_tab, text="  Whitelist  ")
         self._build_players(p_tab)
-        self._build_list_tab(bl_tab, "bl", ["username","user_id","ip"],
+        self._build_list_tab(bl_tab, "bl", ["username","ip"],
                              "Blocked players are rejected at login.")
         self._build_list_tab(wl_tab, "wl", ["username","ip"],
                              "When whitelist is enabled, only these entries may join.")
@@ -1780,7 +1962,7 @@ class PlayerManagerWindow(tk.Toplevel):
     def _selected_username(self):
         sel = self.p_tree.selection()
         if not sel:
-            messagebox.showinfo("No selection","Select a player first.")
+            messagebox.showinfo("No selection","Select a player first.", parent=self)
             return None
         return sel[0]
 
@@ -1788,15 +1970,15 @@ class PlayerManagerWindow(tk.Toplevel):
         uname = self._selected_username()
         if not uname: return
         if not messagebox.askyesno("Kick Player",
-                f"Kick '{uname}' from the server?\nThey can rejoin after."): return
+                f"Kick '{uname}' from the server?\nThey can rejoin after.", parent=self): return
         ok, msg = kick_player(uname, ban=False)
-        messagebox.showinfo("Done" if ok else "Error", msg or "Sent kick command.")
+        messagebox.showinfo("Done" if ok else "Error", msg or "Sent kick command.", parent=self)
 
     def _kick_ban(self):
         uname = self._selected_username()
         if not uname: return
         if not messagebox.askyesno("Kick & Ban",
-                f"Kick and ban '{uname}'?\nThis will also add them to the blacklist."): return
+                f"Kick and ban '{uname}'?\nThis will also add them to the blacklist.", parent=self): return
         # Add to blacklist
         bl = _load_bl()
         if uname.lower() not in [u.lower() for u in bl["usernames"]]:
@@ -1805,7 +1987,7 @@ class PlayerManagerWindow(tk.Toplevel):
         # Kick live session
         ok, msg = kick_player(uname, ban=True)
         detail = msg or "Sent ban command."
-        messagebox.showinfo("Banned", f"'{uname}' added to blacklist.\n{detail}")
+        messagebox.showinfo("Banned", f"'{uname}' added to blacklist.\n{detail}", parent=self)
 
     def _change_uid(self):
         uname = self._selected_username()
@@ -1826,12 +2008,12 @@ class PlayerManagerWindow(tk.Toplevel):
                  bd=6, justify="center").pack(fill="x")
         def confirm():
             try: new_id = int(var.get().strip())
-            except ValueError: messagebox.showerror("Invalid","Must be a number."); return
+            except ValueError: messagebox.showerror("Invalid","Must be a number.", parent=self); return
             with _users_lock:
                 u = _load_users()
                 if uname in u: u[uname]["user_id"] = new_id; _save_users(u)
             prompt.destroy(); self._refresh_players()
-            messagebox.showinfo("Done", f"'{uname}' → ID {new_id}.")
+            messagebox.showinfo("Done", f"'{uname}' → ID {new_id}.", parent=self)
         _btn(prompt, "Save", confirm, "primary",
              font=("Georgia",10,"bold"), pady=8).pack(fill="x", padx=30, pady=(0,14))
         _enable_dark_titlebar(prompt)
@@ -1844,7 +2026,7 @@ class PlayerManagerWindow(tk.Toplevel):
                 "Their token will be cleared. The next time anyone connects using "
                 "this username, whatever token their launcher sends will be "
                 "automatically accepted and saved as the new token — this is how "
-                "a player recovers from a lost token file."):
+                "a player recovers from a lost token file.", parent=self):
             return
         with _users_lock:
             u = _load_users()
@@ -1854,14 +2036,14 @@ class PlayerManagerWindow(tk.Toplevel):
         self._refresh_players()
         messagebox.showinfo("Token Reset",
             f"'{uname}'s token has been cleared.\n"
-            "The next login for this username will be accepted automatically.")
+            "The next login for this username will be accepted automatically.", parent=self)
 
     def _reset_all_tokens(self):
         with _users_lock:
             u = _load_users()
         count = len(u)
         if count == 0:
-            messagebox.showinfo("No players", "There are no known users to reset.")
+            messagebox.showinfo("No players", "There are no known users to reset.", parent=self)
             return
         if not messagebox.askyesno("Reset All Tokens",
                 f"Reset the token for ALL {count} known user(s)?\n\n"
@@ -1870,7 +2052,7 @@ class PlayerManagerWindow(tk.Toplevel):
                 "launcher sends will be automatically accepted and saved as the "
                 "new token — useful right after resetting the server, so "
                 "everyone can reconnect cleanly.\n\n"
-                "This cannot be undone."):
+                "This cannot be undone.", parent=self):
             return
         with _users_lock:
             u = _load_users()
@@ -1880,7 +2062,7 @@ class PlayerManagerWindow(tk.Toplevel):
         self._refresh_players()
         messagebox.showinfo("All Tokens Reset",
             f"Cleared tokens for {count} user(s).\n"
-            "The next login for each username will be accepted automatically.")
+            "The next login for each username will be accepted automatically.", parent=self)
 
     def _edit_roles(self):
         uname = self._selected_username()
@@ -1965,7 +2147,7 @@ class PlayerManagerWindow(tk.Toplevel):
 
     def _open_saves(self):
         try: os.makedirs(PLAYERS_SAVE, exist_ok=True); os.startfile(PLAYERS_SAVE)
-        except Exception as e: messagebox.showerror("Error", str(e))
+        except Exception as e: messagebox.showerror("Error", str(e), parent=self)
 
     # ── Generic list tab ───────────────────────────────────────────────────────
 
@@ -1996,11 +2178,6 @@ class PlayerManagerWindow(tk.Toplevel):
                 bl = _load_bl()
                 if kind=="username" and value.lower() not in [u.lower() for u in bl["usernames"]]:
                     bl["usernames"].append(value)
-                elif kind=="user_id":
-                    try:
-                        uid = int(value)
-                        if uid not in bl["user_ids"]: bl["user_ids"].append(uid)
-                    except: return
                 elif kind=="ip" and value not in bl["ips"]:
                     bl["ips"].append(value)
                 _save_bl(bl)
@@ -2020,7 +2197,6 @@ class PlayerManagerWindow(tk.Toplevel):
             if key=="bl":
                 bl = _load_bl()
                 if kind=="username": bl["usernames"]=[u for u in bl["usernames"] if u.lower()!=str(value).lower()]
-                elif kind=="user_id": bl["user_ids"]=[u for u in bl["user_ids"] if str(u)!=str(value)]
                 elif kind=="ip": bl["ips"]=[i for i in bl["ips"] if i!=value]
                 _save_bl(bl)
             else:
@@ -2040,7 +2216,6 @@ class PlayerManagerWindow(tk.Toplevel):
         for r in self._bl_tree.get_children(): self._bl_tree.delete(r)
         bl = _load_bl()
         for u   in bl.get("usernames",[]): self._bl_tree.insert("","end",values=("username",u))
-        for uid in bl.get("user_ids", []): self._bl_tree.insert("","end",values=("user_id",uid))
         for ip  in bl.get("ips",      []): self._bl_tree.insert("","end",values=("ip",ip))
 
     def _refresh_wllist(self):
@@ -2191,38 +2366,11 @@ def _tavernlib_installed(game_dir):
     return os.path.isfile(os.path.join(game_dir, "Plugins", TAVERNLIB_FILENAME))
 
 
-# YamlDotNet.dll now ships in the same Patch/ folder as themoddingtavern.dll,
-# so — unlike the earlier NuGet-only situation — this is just a local file
-# copy into UserLibs, same idea as TavernLib's install but a different
-# destination folder. No version/update tracking: it's bundled with the
-# launcher release, not fetched from anywhere.
-YAMLDOTNET_FILENAME = "YamlDotNet.dll"
-
-def _yamldotnet_source_path():
-    return os.path.join(_app_dir(), "Patch", YAMLDOTNET_FILENAME)
-
-def _yamldotnet_installed(game_dir):
-    return os.path.isfile(os.path.join(game_dir, "UserLibs", YAMLDOTNET_FILENAME))
-
-def _install_yamldotnet(game_dir):
-    """Copy YamlDotNet.dll from the local Patch/ folder into the game's
-    UserLibs folder. Raises RuntimeError with a user-friendly message if the
-    source file isn't there."""
-    src = _yamldotnet_source_path()
-    if not os.path.isfile(src):
-        raise RuntimeError(
-            f"YamlDotNet.dll not found:\n{src}\n\n"
-            "Make sure the Patch folder is in the same directory as this launcher.")
-    dest_dir = os.path.join(game_dir, "UserLibs")
-    os.makedirs(dest_dir, exist_ok=True)
-    shutil.copy2(src, os.path.join(dest_dir, YAMLDOTNET_FILENAME))
-
 # CircuitsVoiceChat ships as two DLLs (the mod itself plus the Concentus
 # codec it depends on) in one release zip on its own repo — real GitHub
-# releases now, same "latest" alias trick as MelonLoader, not the
-# Patch-folder-only situation YamlDotNet is still in. Per the mod's own
+# releases, same "latest" alias trick as MelonLoader. Per the mod's own
 # install instructions: the mod itself goes in Mods/, Concentus (a shared
-# codec library) goes in UserLibs/ alongside YamlDotNet.
+# codec library) goes in UserLibs/.
 CIRCUITSVOICECHAT_REPO = "CircuitLord/CircuitsVoiceChat"
 CIRCUITSVOICECHAT_DESTINATIONS = {
     "CircuitsVoiceChat.dll": "Mods",
@@ -2744,9 +2892,6 @@ class ModsWindow(tk.Toplevel):
         self._ml_btn = self._mod_row(
             "MelonLoader", "The mod loader itself — required before anything else.",
             self._on_melonloader_click)
-        self._yaml_btn = self._mod_row(
-            "YamlDotNet.dll", "A .NET YAML library some mods depend on.",
-            self._on_yamldotnet_click)
         self._tl_btn = self._mod_row(
             "TavernLib", "Our plugin — adds this server's mod support to the game.",
             self._on_tavernlib_click)
@@ -2808,28 +2953,16 @@ class ModsWindow(tk.Toplevel):
         def worker():
             ml = _melonloader_status(self._game_dir)
             tl = _tavernlib_status(self._game_dir)
-            yaml_ok = _yamldotnet_installed(self._game_dir)
             cvc = _circuitsvoicechat_status(self._game_dir)
-            self.after(0, lambda: self._apply_states(ml, tl, yaml_ok, cvc))
+            self.after(0, lambda: self._apply_states(ml, tl, cvc))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_states(self, ml_state, tl_state, yaml_ok, cvc_state):
+    def _apply_states(self, ml_state, tl_state, cvc_state):
         self._apply_row_state(self._ml_btn, ml_state)
         self._apply_row_state(self._tl_btn, tl_state)
-        self._apply_yaml_state(yaml_ok)
         self._apply_row_state(self._cvc_btn, cvc_state)
         self._status.set("")
         if self._on_status_change: self._on_status_change()
-
-    def _apply_yaml_state(self, installed):
-        """YamlDotNet ships in Patch/ alongside themoddingtavern.dll now, so
-        this is a plain local-file install like TavernLib — just no update
-        tracking, since it's bundled with the launcher rather than fetched."""
-        self._yaml_btn._dotvar.set("●" if installed else "○")
-        self._yaml_btn._dotlabel.config(fg=GREEN if installed else MUTED)
-        self._yaml_btn.config(text="⟳ Reinstall" if installed else "⬇ Install")
-        note = "Detected in UserLibs." if installed else None
-        self._yaml_btn._subvar.set(f"{self._yaml_btn._subtitle}  ·  {note}" if note else self._yaml_btn._subtitle)
 
     def _apply_row_state(self, btn, state):
         dot, color, text = self._STATE_STYLE[state]
@@ -2843,27 +2976,9 @@ class ModsWindow(tk.Toplevel):
         self._busy = busy
         state = "disabled" if busy else "normal"
         self._ml_btn.config(state=state)
-        self._yaml_btn.config(state=state)
         self._tl_btn.config(state=state)
         self._cvc_btn.config(state=state)
         self._status.set(msg)
-
-    def _on_yamldotnet_click(self):
-        if self._busy: return
-        if not _melonloader_installed(self._game_dir):
-            messagebox.showwarning("Install MelonLoader first",
-                "YamlDotNet loads alongside MelonLoader's other libraries — "
-                "install MelonLoader above first.")
-            return
-        self._set_busy(True, "Installing YamlDotNet…")
-
-        def worker():
-            try:
-                _install_yamldotnet(self._game_dir)
-                self.after(0, lambda: self._finish_install(True, "YamlDotNet installed."))
-            except Exception as e:
-                self.after(0, lambda: self._finish_install(False, f"Install failed: {e}"))
-        threading.Thread(target=worker, daemon=True).start()
 
     def _on_melonloader_click(self):
         if self._busy: return
@@ -2871,7 +2986,7 @@ class ModsWindow(tk.Toplevel):
         if not arch:
             messagebox.showerror("Can't tell architecture",
                 "Couldn't determine whether the game is 32- or 64-bit from "
-                "the selected .exe. Try re-browsing to it on the main screen.")
+                "the selected .exe. Try re-browsing to it on the main screen.", parent=self)
             return
         self._set_busy(True, f"Detected {arch} game — starting install…")
 
@@ -2888,7 +3003,7 @@ class ModsWindow(tk.Toplevel):
         if self._busy: return
         if not _melonloader_installed(self._game_dir):
             messagebox.showwarning("Install MelonLoader first",
-                "TavernLib is a MelonLoader plugin — install MelonLoader above first.")
+                "TavernLib is a MelonLoader plugin — install MelonLoader above first.", parent=self)
             return
         self._set_busy(True, "Starting TavernLib install…")
 
@@ -2905,7 +3020,7 @@ class ModsWindow(tk.Toplevel):
         if self._busy: return
         if not _melonloader_installed(self._game_dir):
             messagebox.showwarning("Install MelonLoader first",
-                "CircuitsVoiceChat is a MelonLoader mod — install MelonLoader above first.")
+                "CircuitsVoiceChat is a MelonLoader mod — install MelonLoader above first.", parent=self)
             return
         self._set_busy(True, "Installing CircuitsVoiceChat…")
 
@@ -2957,14 +3072,12 @@ class ServerSettingsWindow(tk.Toplevel):
                  insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
         _hint(self, f"Shown to players who check your server. Max {SERVER_NAME_MAX_LEN} characters. "
                     "Letters, numbers, spaces, hyphens, and underscores only.")
-        _divider(self)
         _section_label(self, "MAX PLAYERS")
         mf = _field(self)
         self.v_max_players = tk.StringVar(value=str(ss.get("max_players", 24)))
         tk.Entry(mf, textvariable=self.v_max_players, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
         _hint(self, "Shown on the community list as a player-count cap.")
-        _divider(self)
         _section_label(self, "PASSWORD  (leave blank to keep current / remove)")
         pf = _field(self)
         self.v_password = tk.StringVar()
@@ -2975,9 +3088,14 @@ class ServerSettingsWindow(tk.Toplevel):
             value="● Password is set." if ss.get("password_hash") else "○ No password set.")
         tk.Label(self, textvariable=self._pw_hint, bg=BG, fg=MUTED,
                  font=("Segoe UI",8)).pack(anchor="w", padx=22)
-        _btn(self, "✕ Remove Password", self._clear_pw, "danger",
-             font=("Segoe UI",9), pady=5, padx=10).pack(anchor="w", padx=22, pady=(4,0))
-        _hint(self, "Players are prompted for this before connecting.")
+        pwbtns = tk.Frame(self, bg=BG)
+        pwbtns.pack(anchor="w", padx=22, pady=(4,0))
+        _btn(pwbtns, "✓ Set Password", self._set_pw,
+             font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
+        _btn(pwbtns, "✕ Remove Password", self._clear_pw, "danger",
+             font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=(6,0))
+        _hint(self, "Takes effect immediately — no need to hit Save Settings for this one. "
+                     "Players are prompted for it before connecting.")
         _section_label(self, "WHITELIST")
         wlf = tk.Frame(self, bg=BG)
         wlf.pack(anchor="w", padx=22, pady=(0,6))
@@ -3008,7 +3126,9 @@ class ServerSettingsWindow(tk.Toplevel):
                        activebackground=BG, activeforeground=AMBER,
                        font=("Segoe UI",9)).pack(side="left")
         _hint(self, "Shares this server's name, IP, and port publicly so it shows "
-                     "up in every player's Community Servers list while it's online.")
+                     "up in every player's Community Servers list while it's online. "
+                     "TavernLib reads this same setting and handles the actual "
+                     "listing — this launcher no longer does that part directly.")
 
         _section_label(self, "PUBLIC HOSTNAME  (optional)")
         hf = _field(self)
@@ -3044,35 +3164,51 @@ class ServerSettingsWindow(tk.Toplevel):
                 "That removes EVERY server hosted on this machine — all "
                 "server data, player saves, and configuration for A "
                 "Township Tale stored there. This cannot be undone.\n\n"
-                "Are you sure you want to continue?", icon="warning"):
+                "Are you sure you want to continue?", icon="warning", parent=self):
             return
         try:
             if os.path.isdir(target):
                 shutil.rmtree(target)
-                messagebox.showinfo("Wiped", "Server data has been removed.")
+                messagebox.showinfo("Wiped", "Server data has been removed.", parent=self)
             else:
                 messagebox.showinfo("Nothing to do",
-                    "That folder doesn't exist — there's nothing to wipe.")
+                    "That folder doesn't exist — there's nothing to wipe.", parent=self)
         except Exception as e:
-            messagebox.showerror("Wipe failed", str(e))
+            messagebox.showerror("Wipe failed", str(e), parent=self)
+
+    def _set_pw(self):
+        pw = self.v_password.get()
+        if not pw:
+            messagebox.showinfo("Nothing to set",
+                "Type a password first — or use Remove Password to clear the "
+                "current one instead.", parent=self)
+            return
+        ss = load_server_settings()
+        ss["password_hash"] = hashlib.sha256(
+            hashlib.sha256(pw.encode()).hexdigest().encode()
+        ).hexdigest()
+        save_server_settings(ss)
+        self._pw_hint.set("● Password is set.")
+        self.v_password.set("")
+        messagebox.showinfo("Set", "Password updated.", parent=self)
 
     def _clear_pw(self):
         ss = load_server_settings()
         ss["password_hash"] = ""
         save_server_settings(ss)
         self._pw_hint.set("○ No password set.")
-        messagebox.showinfo("Cleared", "Password removed.")
+        messagebox.showinfo("Cleared", "Password removed.", parent=self)
 
     def _save(self):
         name = self.v_name.get().strip()
         if name:
             if len(name) > SERVER_NAME_MAX_LEN:
                 messagebox.showerror("Name too long",
-                    f"Server name can be at most {SERVER_NAME_MAX_LEN} characters.")
+                    f"Server name can be at most {SERVER_NAME_MAX_LEN} characters.", parent=self)
                 return
             if not _is_valid_name(name):
                 messagebox.showerror("Invalid name",
-                    "Server name can only contain letters, numbers, spaces, hyphens, and underscores.")
+                    "Server name can only contain letters, numbers, spaces, hyphens, and underscores.", parent=self)
                 return
         ss = load_server_settings()
         ss["name"] = name or "My Tavern Server"
@@ -3082,16 +3218,9 @@ class ServerSettingsWindow(tk.Toplevel):
         ss["public_hostname"] = self.v_hostname.get().strip().lower()
         try: ss["max_players"] = max(1, int(self.v_max_players.get().strip()))
         except ValueError: ss["max_players"] = 24
-        pw = self.v_password.get()
-        if pw:
-            ss["password_hash"] = hashlib.sha256(
-                hashlib.sha256(pw.encode()).hexdigest().encode()
-            ).hexdigest()
-            self._pw_hint.set("● Password is set.")
-            self.v_password.set("")
         save_server_settings(ss)
         if self._on_save: self._on_save(ss["name"])
-        messagebox.showinfo("Saved","Server settings saved.")
+        messagebox.showinfo("Saved","Server settings saved.", parent=self)
         self.destroy()
 
 
@@ -3118,9 +3247,6 @@ class ServerLauncher(tk.Tk):
         self._sett_win = None
         self._console_win = None
         self._tickets_win = None
-        self._community_registered = False
-        self._community_stop = threading.Event()
-        self._community_thread = None
         self._mods_animating  = False
         self._mods_anim_job   = None
         self._mods_anim_phase = 0
@@ -3322,7 +3448,7 @@ class ServerLauncher(tk.Tk):
         if _updater is None:
             return
         def worker():
-            result = _updater.check_for_update(APP_VERSION)
+            result = _updater.check_for_update(APP_VERSION, UPDATE_APP_FOLDER)
             if result:
                 tag, url = result
                 self.after(0, lambda: self._prompt_launcher_update(tag, url))
@@ -3331,7 +3457,7 @@ class ServerLauncher(tk.Tk):
     def _prompt_launcher_update(self, tag, url):
         if not messagebox.askyesno("Update Available",
                 f"A new version is available: {tag} (you have {APP_VERSION}).\n\n"
-                "Update now? The launcher will restart automatically."):
+                "Update now? The launcher will restart automatically.", parent=self):
             return
         self._print(f"Updating to {tag}…", "warn")
         def worker():
@@ -3344,7 +3470,7 @@ class ServerLauncher(tk.Tk):
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("Update failed",
                     f"Couldn't apply the update:\n{e}\n\n"
-                    "The current version is unaffected — nothing was replaced."))
+                    "The current version is unaffected — nothing was replaced.", parent=self))
         threading.Thread(target=worker, daemon=True).start()
 
     def _save(self):
@@ -3364,17 +3490,17 @@ class ServerLauncher(tk.Tk):
                 "Your player data, server settings, tokens, patch, and "
                 "installed mods are NOT affected — only this launcher's own "
                 "remembered fields.\n\n"
-                "This cannot be undone. Continue?", icon="warning"):
+                "This cannot be undone. Continue?", icon="warning", parent=self):
             return
         try:
             if os.path.isfile(CONFIG_FILE):
                 os.remove(CONFIG_FILE)
             messagebox.showinfo("Cache Wiped",
                 "Launcher cache cleared. The app will now close — "
-                "reopen it for a fresh start.")
+                "reopen it for a fresh start.", parent=self)
             self._on_close()
         except Exception as e:
-            messagebox.showerror("Wipe failed", str(e))
+            messagebox.showerror("Wipe failed", str(e), parent=self)
 
     def _browse(self):
         p = filedialog.askopenfilename(
@@ -3387,8 +3513,6 @@ class ServerLauncher(tk.Tk):
             self._sett_win.lift(); return
         def on_save(name):
             self._sv_name_var.set(name)
-            self._apply_community_listing_state(
-                bool(self._proc and self._proc.poll() is None))
         self._sett_win = ServerSettingsWindow(self, on_save)
 
     def _open_manager(self):
@@ -3410,7 +3534,7 @@ class ServerLauncher(tk.Tk):
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Game not found",
-                "Please set the path to 'A Township Tale.exe' above first.")
+                "Please set the path to 'A Township Tale.exe' above first.", parent=self)
             return
         if self._mods_win and self._mods_win.winfo_exists():
             self._mods_win.lift(); return
@@ -3524,7 +3648,7 @@ class ServerLauncher(tk.Tk):
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Game not found",
-                "Please set the path to 'A Township Tale.exe' above first.")
+                "Please set the path to 'A Township Tale.exe' above first.", parent=self)
             return
 
         def worker():
@@ -3532,15 +3656,15 @@ class ServerLauncher(tk.Tk):
                 apply_patch(exe)
                 self.after(0, lambda: (
                     messagebox.showinfo("Patch applied",
-                        "Root.Township.dll has been replaced with the Tavern patch."),
+                        "Root.Township.dll has been replaced with the Tavern patch.", parent=self),
                     self._refresh_patch_alert(exe)))
             except RuntimeError as e:
-                self.after(0, lambda err=str(e): messagebox.showerror("Patch failed", err))
+                self.after(0, lambda err=str(e): messagebox.showerror("Patch failed", err, parent=self))
         threading.Thread(target=worker, daemon=True).start()
 
     def _open_saves(self):
         try: os.makedirs(PLAYERS_SAVE, exist_ok=True); os.startfile(PLAYERS_SAVE)
-        except Exception as e: messagebox.showerror("Error", str(e))
+        except Exception as e: messagebox.showerror("Error", str(e), parent=self)
 
     def _print(self, msg, tag=""):
         def _do():
@@ -3574,7 +3698,7 @@ class ServerLauncher(tk.Tk):
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Not found",
-                "Could not find the game.\nPlease browse first.")
+                "Could not find the game.\nPlease browse first.", parent=self)
             return
         try: port = int(self.v_port.get())
         except: port = 1757
@@ -3592,7 +3716,7 @@ class ServerLauncher(tk.Tk):
                 "/identity_token", identity]
         if not self.v_show_game.get():
             args += ["-batchmode", "-nographics"]
-        args += ["/fly", "/noapi", "/start_server", "-1", "false", str(port)]
+        args += ["/fly", "/launcherauth", "/start_server", "-1", "false", str(port)]
         if self.v_debug_helper.get():
             args.append("/debug_helper")
         self._print(f"Opening server on port {port}…", "warn")
@@ -3631,108 +3755,19 @@ class ServerLauncher(tk.Tk):
             self._pid_var.set(f"PID {self._proc.pid}" if on and self._proc else "")
             self._btn_start.config(state="disabled" if on else "normal")
             self._btn_stop.config(state="normal" if on else "disabled")
-            self._apply_community_listing_state(on)
         self.after(0, _do)
 
-    # ── Community server list ───────────────────────────────────────────────
-
-    def _apply_community_listing_state(self, server_online):
-        """Start or stop the background heartbeat so the community listing
-        tracks both the settings checkbox and whether the server is actually
-        online — flip either one and this brings the listing in line."""
-        ss = load_server_settings()
-        want_listed = bool(ss.get("community_listed")) and server_online
-        if want_listed and not self._community_registered:
-            self._community_registered = True
-            self._community_stop.clear()
-            self._community_thread = threading.Thread(
-                target=self._community_loop, daemon=True)
-            self._community_thread.start()
-        elif not want_listed and self._community_registered:
-            self._community_registered = False
-            self._community_stop.set()
-
-    def _community_loop(self):
-        first = True
-        while True:
-            self._register_community_listing(log=first)
-            first = False
-            if self._community_stop.wait(COMMUNITY_HEARTBEAT_SECONDS):
-                break
-        self._unregister_community_listing()
-
-    def _register_community_listing(self, log=False):
-        ss = load_server_settings()
-        try: port = int(self.v_port.get())
-        except: port = 1757
-        payload = {
-            "listing_token": _get_or_create_listing_token(),
-            "name": ss.get("name", "My Tavern Server"),
-            "port": port,
-            "player_limit": ss.get("max_players", 24),
-            "has_password": bool(ss.get("password_hash")),
-            "kind": "official",
-        }
-        # Prefer real numbers from a mod (e.g. TavernLib) reporting the
-        # game's actual live connection count, if it's there and fresh —
-        # falling back to the admin-configured Max Players setting for the
-        # limit, and just omitting player_count entirely if we have no
-        # real data rather than reporting a made-up 0.
-        live_count, live_limit = _read_live_player_status()
-        if live_count is not None:
-            payload["player_count"] = live_count
-        if live_limit is not None and live_limit > 0:
-            payload["player_limit"] = live_limit
-        hostname = ss.get("public_hostname", "").strip()
-        if hostname:
-            payload["hostname"] = hostname
-        try:
-            req = urllib.request.Request(COMMUNITY_API,
-                data=json.dumps(payload).encode(),
-                headers={"Content-Type": "application/json",
-                         "User-Agent": "TavernServer/1.0"},
-                method="POST")
-            resp = json.loads(urllib.request.urlopen(req, timeout=8).read().decode())
-            if log:
-                self._print("Listed on the community server list.", "ok")
-                if hostname and resp.get("hostname_verified") is False:
-                    self._print(
-                        f"Note: '{hostname}' doesn't currently resolve to this "
-                        "server's IP — showing your raw IP instead until it does.",
-                        "warn")
-        except Exception as e:
-            if log: self._print(f"Could not reach community list: {e}", "warn")
-
-    def _unregister_community_listing(self):
-        try:
-            req = urllib.request.Request(COMMUNITY_API,
-                data=json.dumps({"listing_token": _get_or_create_listing_token()}).encode(),
-                headers={"Content-Type": "application/json",
-                         "User-Agent": "TavernServer/1.0"},
-                method="DELETE")
-            urllib.request.urlopen(req, timeout=5).read()
-            self._print("Removed from the community server list.", "dim")
-        except Exception:
-            pass
-
     def _on_close(self):
-        stopped_now = False
         if self._proc and self._proc.poll() is None:
             if messagebox.askyesno("Server running",
-                                   "Stop the server before closing?"):
+                                   "Stop the server before closing?", parent=self):
                 self._stop()
-                stopped_now = True
-        if self._community_registered and not stopped_now:
-            # _stop() above already triggers this via _set_running(False);
-            # only needed here if the server was left running on close.
-            self._community_stop.set()
-            self._community_registered = False
-            self._unregister_community_listing()
         self.destroy()
 
 
 if __name__ == "__main__":
     if _updater is not None:
+        _updater.finish_update_if_requested()  # never returns if this launch is finishing an update
         _updater.cleanup_previous_update()
     app = ServerLauncher()
     app.mainloop()
