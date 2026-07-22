@@ -4,7 +4,7 @@ The Modding Tavern — Client Launcher
 
 # Bump this with every release you publish to
 # github.com/ModdingTavern/TavernLauncher/releases (tag it vX.Y.Z to match).
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 # The subfolder this app occupies inside the release zip
 # (TavernLauncher-vX.Y.Z.zip contains /Client and /Server side by side) —
@@ -762,7 +762,7 @@ class CommunityBrowser(tk.Toplevel):
     def _selected_server(self):
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("No selection", "Select a server first.")
+            messagebox.showinfo("No selection", "Select a server first.", parent=self)
             return None
         return self._visible[self.tree.index(sel[0])]
 
@@ -789,12 +789,12 @@ class CommunityBrowser(tk.Toplevel):
         cfg = load_cfg()
         saved = cfg.get("saved_servers", [])
         if any(s.get("ip") == host for s in saved):
-            messagebox.showinfo("Already saved", f"'{name}' is already in your favorites.")
+            messagebox.showinfo("Already saved", f"'{name}' is already in your favorites.", parent=self)
             return
         saved.append({"name": name, "ip": host, "port": port})
         cfg["saved_servers"] = saved
         save_cfg(cfg)
-        messagebox.showinfo("Saved", f"'{name}' added to favorites.")
+        messagebox.showinfo("Saved", f"'{name}' added to favorites.", parent=self)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SERVER LIST PANEL  (Saved / Recent)
@@ -926,7 +926,7 @@ class ServerListPanel(tk.Toplevel):
                 saved.append({"name": name, "ip": ip, "port": port})
                 cfg["saved_servers"] = saved
                 save_cfg(cfg)
-                messagebox.showinfo("Saved", f"'{name}' added to favourites.")
+                messagebox.showinfo("Saved", f"'{name}' added to favourites.", parent=self)
 
         _btn(br, "Connect",        connect,  "primary",
              font=("Georgia",10,"bold"), pady=6, padx=14).pack(side="left")
@@ -1071,38 +1071,11 @@ def _tavernlib_installed(game_dir):
     return os.path.isfile(os.path.join(game_dir, "Plugins", TAVERNLIB_FILENAME))
 
 
-# YamlDotNet.dll now ships in the same Patch/ folder as themoddingtavern.dll,
-# so — unlike the earlier NuGet-only situation — this is just a local file
-# copy into UserLibs, same idea as TavernLib's install but a different
-# destination folder. No version/update tracking: it's bundled with the
-# launcher release, not fetched from anywhere.
-YAMLDOTNET_FILENAME = "YamlDotNet.dll"
-
-def _yamldotnet_source_path():
-    return os.path.join(_app_dir(), "Patch", YAMLDOTNET_FILENAME)
-
-def _yamldotnet_installed(game_dir):
-    return os.path.isfile(os.path.join(game_dir, "UserLibs", YAMLDOTNET_FILENAME))
-
-def _install_yamldotnet(game_dir):
-    """Copy YamlDotNet.dll from the local Patch/ folder into the game's
-    UserLibs folder. Raises RuntimeError with a user-friendly message if the
-    source file isn't there."""
-    src = _yamldotnet_source_path()
-    if not os.path.isfile(src):
-        raise RuntimeError(
-            f"YamlDotNet.dll not found:\n{src}\n\n"
-            "Make sure the Patch folder is in the same directory as this launcher.")
-    dest_dir = os.path.join(game_dir, "UserLibs")
-    os.makedirs(dest_dir, exist_ok=True)
-    shutil.copy2(src, os.path.join(dest_dir, YAMLDOTNET_FILENAME))
-
 # CircuitsVoiceChat ships as two DLLs (the mod itself plus the Concentus
 # codec it depends on) in one release zip on its own repo — real GitHub
-# releases now, same "latest" alias trick as MelonLoader, not the
-# Patch-folder-only situation YamlDotNet is still in. Per the mod's own
+# releases, same "latest" alias trick as MelonLoader. Per the mod's own
 # install instructions: the mod itself goes in Mods/, Concentus (a shared
-# codec library) goes in UserLibs/ alongside YamlDotNet.
+# codec library) goes in UserLibs/.
 CIRCUITSVOICECHAT_REPO = "CircuitLord/CircuitsVoiceChat"
 CIRCUITSVOICECHAT_DESTINATIONS = {
     "CircuitsVoiceChat.dll": "Mods",
@@ -1676,8 +1649,9 @@ class TicketsWindow(tk.Toplevel):
         action_row.pack(fill="x", padx=10, pady=(0,10))
         self.v_reply = tk.StringVar()
         tk.Entry(action_row, textvariable=self.v_reply, bg=SURF2, fg=PARCH,
-                 insertbackground=AMBER, relief="flat", font=("Consolas",9),
-                 bd=6).pack(side="left", fill="x", expand=True)
+                 insertbackground=AMBER, relief="flat",
+                 highlightbackground=BORDER, highlightcolor=AMBER, highlightthickness=1,
+                 font=("Consolas",9), bd=6).pack(side="left", fill="x", expand=True)
         _btn(action_row, "Reply", self._respond, font=("Segoe UI",9),
              pady=6, padx=8).pack(side="left", padx=(6,0))
         _btn(action_row, "Close Ticket", self._close_ticket, "danger",
@@ -1918,9 +1892,6 @@ class ModsWindow(tk.Toplevel):
         self._ml_btn = self._mod_row(
             "MelonLoader", "The mod loader itself — required before anything else.",
             self._on_melonloader_click)
-        self._yaml_btn = self._mod_row(
-            "YamlDotNet.dll", "A .NET YAML library some mods depend on.",
-            self._on_yamldotnet_click)
         self._tl_btn = self._mod_row(
             "TavernLib", "Our plugin — adds this server's mod support to the game.",
             self._on_tavernlib_click)
@@ -1982,28 +1953,16 @@ class ModsWindow(tk.Toplevel):
         def worker():
             ml = _melonloader_status(self._game_dir)
             tl = _tavernlib_status(self._game_dir)
-            yaml_ok = _yamldotnet_installed(self._game_dir)
             cvc = _circuitsvoicechat_status(self._game_dir)
-            self.after(0, lambda: self._apply_states(ml, tl, yaml_ok, cvc))
+            self.after(0, lambda: self._apply_states(ml, tl, cvc))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_states(self, ml_state, tl_state, yaml_ok, cvc_state):
+    def _apply_states(self, ml_state, tl_state, cvc_state):
         self._apply_row_state(self._ml_btn, ml_state)
         self._apply_row_state(self._tl_btn, tl_state)
-        self._apply_yaml_state(yaml_ok)
         self._apply_row_state(self._cvc_btn, cvc_state)
         self._status.set("")
         if self._on_status_change: self._on_status_change()
-
-    def _apply_yaml_state(self, installed):
-        """YamlDotNet ships in Patch/ alongside themoddingtavern.dll now, so
-        this is a plain local-file install like TavernLib — just no update
-        tracking, since it's bundled with the launcher rather than fetched."""
-        self._yaml_btn._dotvar.set("●" if installed else "○")
-        self._yaml_btn._dotlabel.config(fg=GREEN if installed else MUTED)
-        self._yaml_btn.config(text="⟳ Reinstall" if installed else "⬇ Install")
-        note = "Detected in UserLibs." if installed else None
-        self._yaml_btn._subvar.set(f"{self._yaml_btn._subtitle}  ·  {note}" if note else self._yaml_btn._subtitle)
 
     def _apply_row_state(self, btn, state):
         dot, color, text = self._STATE_STYLE[state]
@@ -2017,27 +1976,9 @@ class ModsWindow(tk.Toplevel):
         self._busy = busy
         state = "disabled" if busy else "normal"
         self._ml_btn.config(state=state)
-        self._yaml_btn.config(state=state)
         self._tl_btn.config(state=state)
         self._cvc_btn.config(state=state)
         self._status.set(msg)
-
-    def _on_yamldotnet_click(self):
-        if self._busy: return
-        if not _melonloader_installed(self._game_dir):
-            messagebox.showwarning("Install MelonLoader first",
-                "YamlDotNet loads alongside MelonLoader's other libraries — "
-                "install MelonLoader above first.")
-            return
-        self._set_busy(True, "Installing YamlDotNet…")
-
-        def worker():
-            try:
-                _install_yamldotnet(self._game_dir)
-                self.after(0, lambda: self._finish_install(True, "YamlDotNet installed."))
-            except Exception as e:
-                self.after(0, lambda: self._finish_install(False, f"Install failed: {e}"))
-        threading.Thread(target=worker, daemon=True).start()
 
     def _on_melonloader_click(self):
         if self._busy: return
@@ -2045,7 +1986,7 @@ class ModsWindow(tk.Toplevel):
         if not arch:
             messagebox.showerror("Can't tell architecture",
                 "Couldn't determine whether the game is 32- or 64-bit from "
-                "the selected .exe. Try re-browsing to it on the main screen.")
+                "the selected .exe. Try re-browsing to it on the main screen.", parent=self)
             return
         self._set_busy(True, f"Detected {arch} game — starting install…")
 
@@ -2062,7 +2003,7 @@ class ModsWindow(tk.Toplevel):
         if self._busy: return
         if not _melonloader_installed(self._game_dir):
             messagebox.showwarning("Install MelonLoader first",
-                "TavernLib is a MelonLoader plugin — install MelonLoader above first.")
+                "TavernLib is a MelonLoader plugin — install MelonLoader above first.", parent=self)
             return
         self._set_busy(True, "Starting TavernLib install…")
 
@@ -2079,7 +2020,7 @@ class ModsWindow(tk.Toplevel):
         if self._busy: return
         if not _melonloader_installed(self._game_dir):
             messagebox.showwarning("Install MelonLoader first",
-                "CircuitsVoiceChat is a MelonLoader mod — install MelonLoader above first.")
+                "CircuitsVoiceChat is a MelonLoader mod — install MelonLoader above first.", parent=self)
             return
         self._set_busy(True, "Installing CircuitsVoiceChat…")
 
@@ -2516,7 +2457,7 @@ class ClientLauncher(tk.Tk):
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Game not found",
-                "Please set the path to 'A Township Tale.exe' above first.")
+                "Please set the path to 'A Township Tale.exe' above first.", parent=self)
             return
 
         def worker():
@@ -2524,10 +2465,10 @@ class ClientLauncher(tk.Tk):
                 apply_patch(exe)
                 self.after(0, lambda: (
                     messagebox.showinfo("Patch applied",
-                        "Root.Township.dll has been replaced with the Tavern patch."),
+                        "Root.Township.dll has been replaced with the Tavern patch.", parent=self),
                     self._refresh_patch_alert(exe)))
             except RuntimeError as e:
-                self.after(0, lambda err=str(e): messagebox.showerror("Patch failed", err))
+                self.after(0, lambda err=str(e): messagebox.showerror("Patch failed", err, parent=self))
         threading.Thread(target=worker, daemon=True).start()
 
     # ── Persistence ────────────────────────────────────────────────────────────
@@ -2564,7 +2505,7 @@ class ClientLauncher(tk.Tk):
         if _updater is None:
             return
         def worker():
-            result = _updater.check_for_update(APP_VERSION)
+            result = _updater.check_for_update(APP_VERSION, UPDATE_APP_FOLDER)
             if result:
                 tag, url = result
                 self.after(0, lambda: self._prompt_launcher_update(tag, url))
@@ -2573,7 +2514,7 @@ class ClientLauncher(tk.Tk):
     def _prompt_launcher_update(self, tag, url):
         if not messagebox.askyesno("Update Available",
                 f"A new version is available: {tag} (you have {APP_VERSION}).\n\n"
-                "Update now? The launcher will restart automatically."):
+                "Update now? The launcher will restart automatically.", parent=self):
             return
         self._print(f"Updating to {tag}…", "warn")
         def worker():
@@ -2586,7 +2527,7 @@ class ClientLauncher(tk.Tk):
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("Update failed",
                     f"Couldn't apply the update:\n{e}\n\n"
-                    "The current version is unaffected — nothing was replaced."))
+                    "The current version is unaffected — nothing was replaced.", parent=self))
         threading.Thread(target=worker, daemon=True).start()
 
     def _save(self):
@@ -2606,17 +2547,17 @@ class ClientLauncher(tk.Tk):
                 "IP, and toggle preferences — giving you a completely fresh, "
                 "unconfigured launcher next time it starts.\n\n"
                 "Your token files, patch, and installed mods are NOT affected.\n\n"
-                "This cannot be undone. Continue?", icon="warning"):
+                "This cannot be undone. Continue?", icon="warning", parent=self):
             return
         try:
             if os.path.isfile(CONFIG_FILE):
                 os.remove(CONFIG_FILE)
             messagebox.showinfo("Cache Wiped",
                 "Launcher cache cleared. The app will now close — "
-                "reopen it for a fresh start.")
+                "reopen it for a fresh start.", parent=self)
             self.destroy()
         except Exception as e:
-            messagebox.showerror("Wipe failed", str(e))
+            messagebox.showerror("Wipe failed", str(e), parent=self)
 
     def _browse(self):
         p = filedialog.askopenfilename(
@@ -2644,7 +2585,7 @@ class ClientLauncher(tk.Tk):
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Game not found",
-                "Please set the path to 'A Township Tale.exe' above first.")
+                "Please set the path to 'A Township Tale.exe' above first.", parent=self)
             return
         ModsWindow(self, exe, on_status_change=self._refresh_mods_alert)
 
@@ -2819,19 +2760,19 @@ class ClientLauncher(tk.Tk):
 
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Not found",
-                "Could not find the game.\nPlease browse to 'A Township Tale.exe'.")
+                "Could not find the game.\nPlease browse to 'A Township Tale.exe'.", parent=self)
             return
         if not username:
             messagebox.showerror("Missing name",
-                "Please enter your username before connecting.")
+                "Please enter your username before connecting.", parent=self)
             return
         if len(username) > USERNAME_MAX_LEN:
             messagebox.showerror("Name too long",
-                f"Usernames can be at most {USERNAME_MAX_LEN} characters.")
+                f"Usernames can be at most {USERNAME_MAX_LEN} characters.", parent=self)
             return
         if not _is_valid_username(username):
             messagebox.showerror("Invalid name",
-                "Usernames can only contain letters, numbers, spaces, hyphens, and underscores.")
+                "Usernames can only contain letters, numbers, spaces, hyphens, and underscores.", parent=self)
             return
 
         self._save()
@@ -2936,19 +2877,19 @@ class ClientLauncher(tk.Tk):
 
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Not found",
-                "Could not find the game.\nPlease browse to 'A Township Tale.exe'.")
+                "Could not find the game.\nPlease browse to 'A Township Tale.exe'.", parent=self)
             return
         if not username:
             messagebox.showerror("Missing name",
-                "Please enter your username before connecting.")
+                "Please enter your username before connecting.", parent=self)
             return
         if len(username) > USERNAME_MAX_LEN:
             messagebox.showerror("Name too long",
-                f"Usernames can be at most {USERNAME_MAX_LEN} characters.")
+                f"Usernames can be at most {USERNAME_MAX_LEN} characters.", parent=self)
             return
         if not _is_valid_username(username):
             messagebox.showerror("Invalid name",
-                "Usernames can only contain letters, numbers, spaces, hyphens, and underscores.")
+                "Usernames can only contain letters, numbers, spaces, hyphens, and underscores.", parent=self)
             return
 
         self._save()
@@ -2990,6 +2931,7 @@ class ClientLauncher(tk.Tk):
 
 if __name__ == "__main__":
     if _updater is not None:
+        _updater.finish_update_if_requested()  # never returns if this launch is finishing an update
         _updater.cleanup_previous_update()
     app = ClientLauncher()
     app.mainloop()
