@@ -130,7 +130,13 @@ class WsConsoleClient:
             if msg.get("type") == "SystemMessage":
                 data = str(msg.get("data", ""))
                 if "Connection Succeeded" in data:
-                    ws.settimeout(None)
+                    try:
+                        ws.settimeout(None)
+                    except Exception:
+                        try:
+                            ws.sock.settimeout(None)
+                        except Exception:
+                            pass
                     self._ws = ws
                     self._connected = True
                     threading.Thread(target=self._recv_loop, daemon=True).start()
@@ -188,6 +194,8 @@ class WsConsoleClient:
 
     def _recv_loop(self):
         ws = self._ws
+        if ws is None:
+            return
         while not self._stop.is_set():
             try:
                 raw = ws.recv()
@@ -195,6 +203,8 @@ class WsConsoleClient:
                     break
                 self._handle(raw)
             except Exception as e:
+                if not self._stop.is_set() and "timed out" in str(e).lower():
+                    continue
                 if not self._stop.is_set():
                     self._connected = False
                     reason = str(e) or "Connection lost"
@@ -589,6 +599,68 @@ def load_cfg():
 def save_cfg(d):
     try: json.dump(d, open(CONFIG_FILE,"w"), indent=2)
     except: pass
+
+MACROS_FILE = os.path.join(_tavern_data_dir(), "tavern_macros.json")
+
+
+def _normalize_macro_commands(raw):
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = raw.splitlines()
+    elif isinstance(raw, (list, tuple)):
+        items = raw
+    else:
+        items = [raw]
+    commands = []
+    for item in items:
+        text = str(item).strip()
+        if text:
+            commands.append(text)
+    return commands
+
+
+def _normalize_macros(raw):
+    if not isinstance(raw, list):
+        raw = []
+    macros = []
+    for item in raw:
+        name = ""
+        commands = []
+        if isinstance(item, dict):
+            name = str(item.get("name", "")).strip()
+            commands = _normalize_macro_commands(
+                item.get("commands", item.get("command", item.get("lines", [])))
+            )
+        elif isinstance(item, str):
+            name = item.strip()
+        else:
+            continue
+
+        if not name and commands:
+            name = commands[0][:48]
+        if not name:
+            continue
+        macros.append({"name": name, "commands": commands})
+    return macros
+
+
+def _load_macros():
+    try:
+        with open(MACROS_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        raw = []
+    return _normalize_macros(raw)
+
+
+def _save_macros(macros):
+    try:
+        os.makedirs(os.path.dirname(MACROS_FILE), exist_ok=True)
+        with open(MACROS_FILE, "w", encoding="utf-8") as f:
+            json.dump(_normalize_macros(macros), f, indent=2)
+    except Exception:
+        pass
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  LOG TAILER
@@ -2422,6 +2494,7 @@ class TavernKeeperWindow(tk.Toplevel):
         self._stop = threading.Event()
         self._prefab_list = None
         self._save_items = []  # list of (label, spawn_string) staged for Save/Load
+        self._macros = _load_macros()
         self._build_connect_form()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _enable_dark_titlebar(self)
@@ -2593,18 +2666,22 @@ class TavernKeeperWindow(tk.Toplevel):
         settings_tab = tk.Frame(nb, bg=BG)
         saveload_tab = tk.Frame(nb, bg=BG)
         admin_tab    = tk.Frame(nb, bg=BG)
+        macros_tab   = tk.Frame(nb, bg=BG)
         nb.add(spawn_tab,    text="  Spawn  ")
         nb.add(select_tab,   text="  Find & Select  ")
         nb.add(move_tab,     text="  Move & Rotate  ")
         nb.add(settings_tab, text="  Server Settings  ")
         nb.add(saveload_tab, text="  Save & Load  ")
         nb.add(admin_tab,    text="  Player Admin  ")
+        nb.add(macros_tab,   text="  Macros  ")
         self._build_spawn_tab(spawn_tab)
         self._build_select_tab(select_tab)
         self._build_move_tab(move_tab)
         self._build_settings_tab(settings_tab)
         self._build_saveload_tab(saveload_tab)
         self._build_admin_tab(admin_tab)
+        self._build_macros_tab(macros_tab)
+        self._refresh_macros()
 
         _section_label(self, "CONSOLE OUTPUT")
         lf = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
@@ -2617,6 +2694,206 @@ class TavernKeeperWindow(tk.Toplevel):
         self.out.pack(side="left", fill="both", expand=True, padx=6, pady=6)
         for t,c in [("ok",GREEN),("warn",AMBER),("err",RED),("cyan",CYAN)]:
             self.out.tag_config(t, foreground=c)
+
+    def _build_macros_tab(self, parent):
+        tk.Label(parent, text="Save one or more console commands as a reusable macro.",
+                 bg=BG, fg=MUTED, font=("Segoe UI",9), wraplength=680, justify="left"
+        ).pack(anchor="w", padx=8, pady=(10,6))
+
+        row = tk.Frame(parent, bg=BG)
+        row.pack(fill="x", padx=8, pady=(0,8))
+        _btn(row, "+ Add Macro", self._add_macro, "primary",
+             font=("Segoe UI",9,"bold"), pady=6, padx=12).pack(side="left")
+        _btn(row, "⟳ Refresh", self._refresh_macros,
+             font=("Segoe UI",9), pady=6, padx=12).pack(side="left", padx=6)
+        self._macro_count_var = tk.StringVar(value="0 macros")
+        tk.Label(row, textvariable=self._macro_count_var, bg=BG, fg=MUTED,
+                 font=("Segoe UI",8)).pack(side="right")
+
+        container = tk.Frame(parent, bg=BG)
+        container.pack(fill="both", expand=True, padx=8, pady=(0,10))
+        self._macro_canvas = tk.Canvas(container, bg=BG, highlightthickness=0)
+        sb = _mk_scrollbar(container, self._macro_canvas.yview)
+        sb.pack(side="right", fill="y")
+        self._macro_canvas.config(yscrollcommand=sb.set)
+        self._macro_canvas.pack(side="left", fill="both", expand=True)
+
+        self._macro_list_host = tk.Frame(self._macro_canvas, bg=BG)
+        self._macro_window = self._macro_canvas.create_window((0, 0), window=self._macro_list_host, anchor="nw")
+
+        def _sync_scrollregion(_event=None):
+            bbox = self._macro_canvas.bbox("all")
+            if bbox:
+                self._macro_canvas.configure(scrollregion=bbox)
+
+        self._macro_list_host.bind("<Configure>", _sync_scrollregion)
+        self._macro_canvas.bind(
+            "<Configure>",
+            lambda e: self._macro_canvas.itemconfig(self._macro_window, width=e.width),
+        )
+
+    def _refresh_macros(self):
+        if not hasattr(self, "_macro_list_host"):
+            return
+        self._macros = _load_macros()
+        for child in list(self._macro_list_host.winfo_children()):
+            child.destroy()
+
+        count = len(self._macros)
+        self._macro_count_var.set(f"{count} macro{'s' if count != 1 else ''}")
+
+        if not self._macros:
+            tk.Label(
+                self._macro_list_host,
+                text="No macros yet. Add one to store a reusable command list.",
+                bg=BG, fg=MUTED, font=("Segoe UI",9), wraplength=680, justify="left"
+            ).pack(anchor="w", padx=6, pady=12)
+            return
+
+        for idx, macro in enumerate(self._macros):
+            card = tk.Frame(self._macro_list_host, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+            card.pack(fill="x", padx=2, pady=(0,6))
+
+            left = tk.Frame(card, bg=SURF)
+            left.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+            tk.Label(left, text=macro.get("name", "Unnamed Macro"), bg=SURF, fg=AMBER,
+                     font=("Georgia",10,"bold"), anchor="w", justify="left"
+            ).pack(anchor="w")
+            commands = macro.get("commands", []) or []
+            preview = " ⏎ ".join(commands) if commands else "No commands defined."
+            if len(preview) > 220:
+                preview = preview[:217] + "…"
+            tk.Label(left, text=preview, bg=SURF, fg=PARCH, font=MONO,
+                     wraplength=540, justify="left", anchor="w"
+            ).pack(anchor="w", pady=(4,0))
+
+            actions = tk.Frame(card, bg=SURF)
+            actions.pack(side="right", padx=10, pady=10)
+            _btn(actions, "▶ Run", lambda i=idx: self._run_macro(i), "success",
+                 font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
+            _btn(actions, "✏ Edit", lambda i=idx: self._edit_macro(i),
+                 font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=6)
+            _btn(actions, "🗑 Delete", lambda i=idx: self._delete_macro(i), "danger",
+                 font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
+
+    def _macro_editor_dialog(self, macro=None):
+        win = tk.Toplevel(self)
+        win.title("Edit Macro" if macro else "Add Macro")
+        win.configure(bg=BG)
+        win.resizable(True, True)
+        _set_window_icon(win)
+        _enable_dark_titlebar(win)
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="Macro name", bg=BG, fg=PARCH,
+                 font=("Segoe UI",9,"bold")).pack(anchor="w", padx=16, pady=(14,4))
+        name_var = tk.StringVar(value=(macro or {}).get("name", ""))
+        name_entry = tk.Entry(win, textvariable=name_var, bg=SURF, fg=PARCH,
+                              insertbackground=AMBER, relief="flat",
+                              font=("Consolas",10), bd=6)
+        name_entry.pack(fill="x", padx=16)
+
+        tk.Label(win, text="Commands (one per line; use {target} for the current player)", bg=BG, fg=PARCH,
+                 font=("Segoe UI",9,"bold")).pack(anchor="w", padx=16, pady=(12,4))
+        body = tk.Frame(win, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        body.pack(fill="both", expand=True, padx=16, pady=(0,10))
+        text = tk.Text(body, bg=SURF, fg=PARCH, insertbackground=AMBER,
+                       relief="flat", bd=0, wrap="word", font=MONO, height=10)
+        scroll = _mk_scrollbar(body, text.yview)
+        scroll.pack(side="right", fill="y")
+        text.config(yscrollcommand=scroll.set)
+        text.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+        if macro:
+            text.insert("1.0", "\n".join(macro.get("commands", [])))
+
+        result = {}
+
+        def _save(event=None):
+            name = name_var.get().strip()
+            commands = [line.strip() for line in text.get("1.0", "end").splitlines() if line.strip()]
+            if not name:
+                messagebox.showinfo("Missing name", "Give the macro a name.", parent=win)
+                return
+            if not commands:
+                messagebox.showinfo("Missing commands", "Enter at least one command.", parent=win)
+                return
+            result["macro"] = {"name": name, "commands": commands}
+            win.destroy()
+
+        btns = tk.Frame(win, bg=BG)
+        btns.pack(fill="x", padx=16, pady=(0,14))
+        _btn(btns, "Save", _save, "primary",
+             font=("Georgia",10,"bold"), pady=8).pack(side="left")
+        _btn(btns, "Cancel", win.destroy,
+             font=("Segoe UI",9), pady=8, padx=10).pack(side="left", padx=6)
+
+        name_entry.focus_set()
+        name_entry.bind("<Return>", lambda e: text.focus_set())
+        text.bind("<Control-Return>", _save)
+        win.update_idletasks()
+        self.wait_window(win)
+        return result.get("macro")
+
+    def _add_macro(self):
+        macro = self._macro_editor_dialog()
+        if not macro:
+            return
+        self._macros.append(macro)
+        _save_macros(self._macros)
+        self._refresh_macros()
+
+    def _edit_macro(self, idx):
+        if idx < 0 or idx >= len(self._macros):
+            return
+        macro = self._macro_editor_dialog(self._macros[idx])
+        if not macro:
+            return
+        self._macros[idx] = macro
+        _save_macros(self._macros)
+        self._refresh_macros()
+
+    def _delete_macro(self, idx):
+        if idx < 0 or idx >= len(self._macros):
+            return
+        macro = self._macros[idx]
+        if not messagebox.askyesno(
+            "Delete Macro",
+            f"Delete macro '{macro.get('name', 'Unnamed Macro')}'?",
+            parent=self,
+        ):
+            return
+        self._macros.pop(idx)
+        _save_macros(self._macros)
+        self._refresh_macros()
+
+    def _run_macro(self, idx):
+        if idx < 0 or idx >= len(self._macros):
+            return
+        if not self._connected or not self._ws_client:
+            messagebox.showinfo("Not connected", "Connect to a server first.", parent=self)
+            return
+        macro = self._macros[idx]
+        commands = macro.get("commands", []) or []
+        if not commands:
+            messagebox.showinfo("Empty macro", "This macro has no commands to run.", parent=self)
+            return
+
+        needs_target = any(("{target}" in cmd) or ("{player}" in cmd) or ("{username}" in cmd) for cmd in commands)
+        target = self.v_target.get().strip() if hasattr(self, "v_target") else ""
+        if needs_target and not target:
+            target = self._current_target() or ""
+            if not target:
+                return
+
+        self._append_log(f"[Macro] {macro.get('name', 'Unnamed Macro')}\n", "ok")
+        for cmd in commands:
+            resolved = (cmd.replace("{target}", target)
+                          .replace("{player}", target)
+                          .replace("{username}", target))
+            self._append_log(f"> {resolved}\n", "cyan")
+            self._ws_client.send(resolved)
 
     def _append_log(self, text, tag=""):
         self.out.config(state="normal")
