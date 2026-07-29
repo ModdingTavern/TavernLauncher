@@ -2789,7 +2789,7 @@ class TavernKeeperWindow(tk.Toplevel):
                               font=("Consolas",10), bd=6)
         name_entry.pack(fill="x", padx=16)
 
-        tk.Label(win, text="Commands (one per line; use {target} for the current player)", bg=BG, fg=PARCH,
+        tk.Label(win, text="Commands (one per line; use {target} for the current player and 'wait <seconds>' to pause)", bg=BG, fg=PARCH,
                  font=("Segoe UI",9,"bold")).pack(anchor="w", padx=16, pady=(12,4))
         body = tk.Frame(win, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         body.pack(fill="both", expand=True, padx=16, pady=(0,10))
@@ -2883,6 +2883,14 @@ class TavernKeeperWindow(tk.Toplevel):
 
         self._append_log(f"[Macro] {macro.get('name', 'Unnamed Macro')}\n", "ok")
         for cmd in commands:
+            if cmd.startswith("wait "):
+                self._append_log(f"[Macro] Waiting {cmd[5:].strip()} seconds…\n", "warn")
+                try:
+                    delay = float(cmd[5:].strip())
+                    time.sleep(max(0, delay))
+                except ValueError:
+                    self._append_log(f"[Macro] Invalid wait time: {cmd[5:].strip()}\n", "err")
+                continue
             resolved = (cmd.replace("{target}", target)
                           .replace("{player}", target)
                           .replace("{username}", target))
