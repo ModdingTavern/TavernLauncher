@@ -130,13 +130,7 @@ class WsConsoleClient:
             if msg.get("type") == "SystemMessage":
                 data = str(msg.get("data", ""))
                 if "Connection Succeeded" in data:
-                    try:
-                        ws.settimeout(None)
-                    except Exception:
-                        try:
-                            ws.sock.settimeout(None)
-                        except Exception:
-                            pass
+                    ws.settimeout(None)
                     self._ws = ws
                     self._connected = True
                     threading.Thread(target=self._recv_loop, daemon=True).start()
