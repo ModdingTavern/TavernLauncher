@@ -3468,67 +3468,69 @@ class TavernKeeperWindow(tk.Toplevel):
     # ── Move & Rotate tab ───────────────────────────────────────────────────
 
     def _build_move_tab(self, parent):
-        tk.Label(parent, text="Acts on whatever is currently selected in Find & Select.",
-                 bg=BG, fg=MUTED, font=("Segoe UI",9), wraplength=680, justify="left"
-        ).pack(anchor="w", padx=8, pady=(10,12))
+           tk.Label(parent, text="Acts on whatever is currently selected in Find & Select.",
+                  bg=BG, fg=MUTED, font=("Segoe UI",9), wraplength=680, justify="left"
+           ).pack(anchor="w", padx=8, pady=(10,12))
 
-        outer = tk.Frame(parent, bg=BG)
-        outer.pack()
+           outer = tk.Frame(parent, bg=BG)
+           outer.pack()
 
-        move_box = tk.Frame(outer, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
-        move_box.pack(side="left", padx=(0,20), pady=4, ipadx=12, ipady=12)
-        mrow = tk.Frame(move_box, bg=SURF)
-        mrow.pack()
-        tk.Label(mrow, text="Move amount", bg=SURF, fg=PARCH,
-                 font=("Segoe UI",9,"bold")).grid(row=0, column=0, columnspan=3, pady=(0,6))
-        self.v_move_amount = tk.StringVar(value="0.5")
-        tk.Entry(mrow, textvariable=self.v_move_amount, bg=SURF2, fg=PARCH,
-                 insertbackground=AMBER, relief="flat", font=("Consolas",11),
-                 bd=6, width=6, justify="center").grid(row=0, column=3, pady=(0,6))
+           move_box = tk.Frame(outer, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+           move_box.pack(side="left", padx=(0,20), pady=4, ipadx=12, ipady=12)
+           mrow = tk.Frame(move_box, bg=SURF)
+           mrow.pack()
+           tk.Label(mrow, text="Move amount", bg=SURF, fg=PARCH,
+                  font=("Segoe UI",9,"bold")).grid(row=0, column=0, columnspan=3, pady=(0,6))
+           self.v_move_amount = tk.StringVar(value="0.5")
+           tk.Entry(mrow, textvariable=self.v_move_amount, bg=SURF2, fg=PARCH,
+                  insertbackground=AMBER, relief="flat", font=("Consolas",11),
+                  bd=6, width=6, justify="center").grid(row=0, column=3, pady=(0,6))
 
-        moves = [("↑","forward",1,1),("←","left",2,0),("→","right",2,2),
-                 ("↓","back",3,1),("Up","up",1,3),("Down","down",3,3)]
-        for label, direction, r, c in moves:
-            _btn(mrow, label, lambda d=direction: self._on_move(d), "primary",
-                 font=("Segoe UI",11,"bold"), width=5, pady=10).grid(row=r, column=c, padx=5, pady=5)
+           moves = [("↑","forward",1,1),("←","left",2,0),("→","right",2,2),
+                  ("↓","back",3,1),("Up","up",1,3),("Down","down",3,3)]
+           for label, direction, r, c in moves:
+              _btn(mrow, label, lambda d=direction: self._on_move(d), "primary",
+                  font=("Segoe UI",11,"bold"), width=5, pady=10).grid(row=r, column=c, padx=5, pady=5)
+           _btn(mrow, "Clone", self._on_clone_selection, "primary",
+               font=("Segoe UI",11,"bold"), width=5, pady=10).grid(row=2, column=1, padx=5, pady=5)
 
-        rotate_box = tk.Frame(outer, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
-        rotate_box.pack(side="left", pady=4, ipadx=12, ipady=12)
-        rrow = tk.Frame(rotate_box, bg=SURF)
-        rrow.pack()
-        tk.Label(rrow, text="Rotate degrees", bg=SURF, fg=PARCH,
-                 font=("Segoe UI",9,"bold")).grid(row=0, column=0, columnspan=2, pady=(0,6))
-        self.v_rotate_degrees = tk.StringVar(value="15")
-        tk.Entry(rrow, textvariable=self.v_rotate_degrees, bg=SURF2, fg=PARCH,
-                 insertbackground=AMBER, relief="flat", font=("Consolas",11),
-                 bd=6, width=6, justify="center").grid(row=0, column=2, pady=(0,6))
+           rotate_box = tk.Frame(outer, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+           rotate_box.pack(side="left", pady=4, ipadx=12, ipady=12)
+           rrow = tk.Frame(rotate_box, bg=SURF)
+           rrow.pack()
+           tk.Label(rrow, text="Rotate degrees", bg=SURF, fg=PARCH,
+                  font=("Segoe UI",9,"bold")).grid(row=0, column=0, columnspan=2, pady=(0,6))
+           self.v_rotate_degrees = tk.StringVar(value="15")
+           tk.Entry(rrow, textvariable=self.v_rotate_degrees, bg=SURF2, fg=PARCH,
+                  insertbackground=AMBER, relief="flat", font=("Consolas",11),
+                  bd=6, width=6, justify="center").grid(row=0, column=2, pady=(0,6))
 
-        rotations = [("Pitch −","pitch",-1),("Pitch +","pitch",1),
+           rotations = [("Pitch −","pitch",-1),("Pitch +","pitch",1),
                      ("Roll −","roll",-1),("Roll +","roll",1),
                      ("Yaw −","yaw",-1),("Yaw +","yaw",1)]
-        for i, (label, axis, sign) in enumerate(rotations):
-            _btn(rrow, label, lambda a=axis, s=sign: self._on_rotate(a, s), "primary",
-                 font=("Segoe UI",9,"bold"), pady=9, padx=8).grid(row=1+i//2, column=i%2, padx=5, pady=5)
+           for i, (label, axis, sign) in enumerate(rotations):
+              _btn(rrow, label, lambda a=axis, s=sign: self._on_rotate(a, s), "primary",
+                  font=("Segoe UI",9,"bold"), pady=9, padx=8).grid(row=1+i//2, column=i%2, padx=5, pady=5)
 
-        # ── Scale ──────────────────────────────────────────────────────────
-        _section_label(parent, "SCALE")
-        scale_hint = tk.Label(parent, text="Sets the uniform scale of the selected object (1.0 = normal).",
-                 bg=BG, fg=MUTED, font=("Segoe UI",8), wraplength=680, justify="left")
-        scale_hint.pack(anchor="w", padx=10, pady=(0,6))
-        sf = tk.Frame(parent, bg=BG)
-        sf.pack(padx=8, pady=(0,10))
-        _btn(sf, "−", lambda: self._scale_step(-0.25), "primary",
-             font=("Segoe UI",12,"bold"), width=3, pady=6).pack(side="left")
-        self.v_scale = tk.StringVar(value="1.0")
-        scale_entry = tk.Entry(sf, textvariable=self.v_scale, bg=SURF, fg=PARCH,
-                 insertbackground=AMBER, relief="flat", font=("Consolas",11),
-                 bd=6, width=7, justify="center")
-        scale_entry.pack(side="left", padx=6)
-        scale_entry.bind("<Return>", lambda e: self._on_set_scale())
-        _btn(sf, "+", lambda: self._scale_step(0.25), "primary",
-             font=("Segoe UI",12,"bold"), width=3, pady=6).pack(side="left")
-        _btn(sf, "Set Scale", self._on_set_scale, "primary",
-             font=("Segoe UI",9,"bold"), pady=6, padx=10).pack(side="left", padx=(12,0))
+           # ── Scale ──────────────────────────────────────────────────────────
+           _section_label(parent, "SCALE")
+           scale_hint = tk.Label(parent, text="Sets the uniform scale of the selected object (1.0 = normal).",
+                  bg=BG, fg=MUTED, font=("Segoe UI",8), wraplength=680, justify="left")
+           scale_hint.pack(anchor="w", padx=10, pady=(0,6))
+           sf = tk.Frame(parent, bg=BG)
+           sf.pack(padx=8, pady=(0,10))
+           _btn(sf, "−", lambda: self._scale_step(-0.25), "primary",
+               font=("Segoe UI",12,"bold"), width=3, pady=6).pack(side="left")
+           self.v_scale = tk.StringVar(value="1.0")
+           scale_entry = tk.Entry(sf, textvariable=self.v_scale, bg=SURF, fg=PARCH,
+                  insertbackground=AMBER, relief="flat", font=("Consolas",11),
+                  bd=6, width=7, justify="center")
+           scale_entry.pack(side="left", padx=6)
+           scale_entry.bind("<Return>", lambda e: self._on_set_scale())
+           _btn(sf, "+", lambda: self._scale_step(0.25), "primary",
+               font=("Segoe UI",12,"bold"), width=3, pady=6).pack(side="left")
+           _btn(sf, "Set Scale", self._on_set_scale, "primary",
+               font=("Segoe UI",9,"bold"), pady=6, padx=10).pack(side="left", padx=(12,0))
 
     def _scale_step(self, delta):
         try:
@@ -3651,6 +3653,35 @@ class TavernKeeperWindow(tk.Toplevel):
             messagebox.showinfo("Invalid amount", "Enter a number for the rotate degrees.", parent=self)
             return
         self._send_to_selection(f"select rotate {axis} {degrees}")
+
+    def _on_clone_selection(self):
+        """Duplicate the current single selection or every entity in the active group."""
+        ids = self._active_entity_ids()
+        if ids:
+            self._clone_entity_list(ids, 0)
+        else:
+            def on_result(rs, rd):
+                spawn_string = TavernKeeperWindow._clean_spawn_string(rs) if rs else None
+                if not spawn_string:
+                    messagebox.showinfo("No selection", "Select an object first.", parent=self)
+                    return
+                self._send(f"spawn string-raw {self._q(spawn_string)}")
+            self._send_and_capture("select tostring", on_result)
+
+    def _clone_entity_list(self, ids, i):
+        """Recursively clone every entity in a selected group."""
+        if i >= len(ids):
+            return
+        eid = ids[i]
+        self._send(f"select {eid}")
+
+        def on_result(rs, rd):
+            spawn_string = TavernKeeperWindow._clean_spawn_string(rs) if rs else None
+            if spawn_string:
+                self._send(f"spawn string-raw {self._q(spawn_string)}")
+            self.after(150, lambda: self._clone_entity_list(ids, i + 1))
+
+        self.after(80, lambda: self._send_and_capture("select tostring", on_result))
 
     # ── Server Settings tab ─────────────────────────────────────────────────
 
