@@ -65,9 +65,16 @@ class CommunityBrowser(tk.Toplevel):
         self._sort_col   = None
         self._sort_reverse = False
         self._ping_sema  = threading.Semaphore(self._MAX_CONCURRENT_PINGS)
+        self._load()
         self._build()
         self._refresh()
         _finish_dark_window(self)
+
+    def _load(self):
+        cfg = load_cfg()
+        self._sort_col = cfg.get("sort_col", None)
+        self._sort_reverse = cfg.get("sort_reverse", False)
+        save_cfg(cfg)
 
     def _build(self):
         h = tk.Frame(self, bg=SURF, height=44)
@@ -188,6 +195,10 @@ class CommunityBrowser(tk.Toplevel):
         else:
             self._sort_col = col
             self._sort_reverse = False
+        cfg = load_cfg()
+        cfg["sort_col"] = self._sort_col
+        cfg["sort_reverse"] = self._sort_reverse
+        save_cfg(cfg)
         self._populate()
 
     def _populate(self):
