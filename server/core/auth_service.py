@@ -315,7 +315,8 @@ def _handle_auth(conn, addr, log_fn):
 
         log_fn(f"'{username}' (ID {user_id}) from {ip}", "ok")
         conn.sendall(json.dumps({"status":"ok","user_id":user_id,
-                                  "quest_scene_required": bool(ss.get("quest_scene", False))}).encode())
+                                  "quest_scene_required": bool(ss.get("quest_scene", False)),
+                                  "tutorial_scene_required": bool(ss.get("tutorial_scene", False))}).encode())
     except Exception as e:
         try: conn.sendall(json.dumps({"status":"error","message":str(e)}).encode())
         except: pass
