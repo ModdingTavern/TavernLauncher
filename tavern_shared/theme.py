@@ -59,6 +59,9 @@ def _hint(parent, text):
                    font=("Segoe UI",8))
     lbl.pack(anchor="w", padx=22, pady=(0,2))
     def _update_wrap(event):
+        # A toplevel also receives Configure events from every widget in it.
+        if event.widget is not parent:
+            return
         lbl.config(wraplength=max(100, event.width - 44))
     parent.bind("<Configure>", _update_wrap, add="+")
     return lbl
