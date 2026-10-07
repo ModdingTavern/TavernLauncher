@@ -213,6 +213,10 @@ Recommended to leave this off. If turned on, the server will launch as a regular
 
 Enabling this check will load the gameworld as the Quest version. That means the forest is not available and the graphics are generally turned down.
 
+### Tutorial Scene
+
+Enabling this check will load the gameworld as the tutorial scene when the server starts.
+
 ### Check Server button
 
 This button can be clicked to probe the status of a server to make sure it's up and to see whether it has a password/whitelist or not.

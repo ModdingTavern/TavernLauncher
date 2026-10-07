@@ -235,6 +235,12 @@ class ServerLauncher(tk.Tk):
                        activebackground=BG, activeforeground=AMBER,
                        padx=0, pady=0, borderwidth=0, highlightthickness=0,
                        font=("Segoe UI",7)).pack(side="left", padx=(8,0))
+        self.v_tutorial_scene = tk.BooleanVar(value=ss_for_quest_scene.get("tutorial_scene", False))
+        tk.Checkbutton(df, text="Tutorial Scene", variable=self.v_tutorial_scene,
+                       command=self._save_tutorial_scene, bg=BG, fg=MUTED, selectcolor=SURF,
+                       activebackground=BG, activeforeground=AMBER,
+                       padx=0, pady=0, borderwidth=0, highlightthickness=0,
+                       font=("Segoe UI",7)).pack(side="left", padx=(8,0))
         _btn(df, "🗑 Wipe Cache", self._wipe_cache,
              font=("Segoe UI",7), pady=2, padx=6).pack(side="right")
         self._addons_btn = _btn(df, "🧩 Addons", self._open_addons,
@@ -391,8 +397,19 @@ class ServerLauncher(tk.Tk):
         something a connecting client needs to learn about via the auth
         handshake, so it has to live in server_settings.json rather than
         this launcher's own local cfg."""
+        if self.v_quest_scene.get():
+            self.v_tutorial_scene.set(False)
+        self._save_scenes()
+
+    def _save_tutorial_scene(self):
+        if self.v_tutorial_scene.get():
+            self.v_quest_scene.set(False)
+        self._save_scenes()
+
+    def _save_scenes(self):
         ss = load_server_settings()
         ss["quest_scene"] = self.v_quest_scene.get()
+        ss["tutorial_scene"] = self.v_tutorial_scene.get()
         save_server_settings(ss)
 
     def _wipe_cache(self):
@@ -735,7 +752,9 @@ class ServerLauncher(tk.Tk):
         args += ["/fly", "/launcherauth", "/start_server", "-1", "false", str(port)]
         if self.v_debug_helper.get():
             args.append("/debug_helper")
-        if self.v_quest_scene.get():
+        if self.v_tutorial_scene.get():
+            args.append("/tutorialScene")
+        elif self.v_quest_scene.get():
             args.append("/questScene")
         self._print(f"Opening server on port {port}…", "warn")
         try:

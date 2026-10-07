@@ -943,7 +943,7 @@ class ClientLauncher(tk.Tk):
         else:
             token, token_is_new, had_token_before = _token_state
 
-        user_id, error, quest_scene_required = authenticate(host, username, token, password=password)
+        user_id, error, scene_arg = authenticate(host, username, token, password=password)
 
         if error == "NEEDS_PASSWORD":
             self._action_btn.config(state="normal")
@@ -1033,11 +1033,11 @@ class ClientLauncher(tk.Tk):
         args += ["/dev_server_port", str(_valid_port(self.v_port.get()))]
         if self.v_debug_helper.get():
             args.append("/debug_helper")
-        if quest_scene_required:
+        if scene_arg:
             # Not a local preference the player can toggle — this server
             # told us during the auth handshake that it needs this, so the
             # client has to match, not choose for itself.
-            args.append("/questScene")
+            args.append(scene_arg)
 
         self._print(f"Launching on {platform or 'default'}…", "warn")
         try:

@@ -133,6 +133,7 @@ def load_server_settings():
     ss["enforce_ip_limit"]  = bool(ss.get("enforce_ip_limit", True))
     ss["community_listed"]  = bool(ss.get("community_listed", False))
     ss["quest_scene"]       = bool(ss.get("quest_scene", False))
+    ss["tutorial_scene"]    = bool(ss.get("tutorial_scene", False))
 
     # Restricted to the exact set the community backend will actually
     # honor, same reasoning as VALID_REGIONS' own comment above.
