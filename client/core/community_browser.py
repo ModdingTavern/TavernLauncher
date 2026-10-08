@@ -12,16 +12,26 @@ from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set
 from client.core.config import load_cfg, save_cfg, COMMUNITY_API
 from client.core.auth import ping_server
 
+def _scene_label(s):
+    # Tutorial wins over quest, same as the server launcher and TavernLib.
+    if s.get("tutorial"):
+        return "Tutorial"
+    if s.get("quest"):
+        return "Quest"
+    return "Normal"
+
+
 class CommunityBrowser(tk.Toplevel):
-    _COLUMNS = ("name","address","players","locked","type","region","version","ping")
+    _COLUMNS = ("name","address","players","locked","type","scene","region","version","ping")
     _HEADINGS = {"name":"Name","address":"Address","players":"Players",
-                 "locked":"","type":"Type","region":"Region","version":"Version","ping":"Ping"}
+                 "locked":"","type":"Type","scene":"Scene","region":"Region","version":"Version","ping":"Ping"}
     _SORT_KEYS = {
         "name":    lambda s: s.get("name","").lower(),
         "address": lambda s: s.get("address","").lower(),
         "players": lambda s: s.get("player_count",0),
         "locked":  lambda s: bool(s.get("has_password")),
         "type":    lambda s: s.get("kind","official"),
+        "scene":   lambda s: _scene_label(s),
         "region":  lambda s: s.get("region","unknown").lower(),
         "version": lambda s: s.get("version","unknown").lower(),
         # Not-yet-checked (key absent) and confirmed-offline (-1) both sort
@@ -57,7 +67,7 @@ class CommunityBrowser(tk.Toplevel):
         _start_hidden(self)
         self.title("Community Servers")
         self.configure(bg=BG)
-        self.geometry("850x460")
+        self.geometry("900x460")
         self.resizable(False, False)
         self._on_select = on_select
         self._servers   = []   # full list, straight from the API
@@ -92,7 +102,7 @@ class CommunityBrowser(tk.Toplevel):
         lf = tk.Frame(self, bg=BG)
         lf.pack(fill="both", expand=True, padx=20, pady=(0,8))
         self.tree = _mk_tree(lf, self._COLUMNS,
-                             [190,130,65,30,85,60,95,80], height=8, hscroll=True)
+                             [190,130,65,30,85,75,60,95,80], height=8, hscroll=True)
         for col in self._COLUMNS:
             self.tree.heading(col, text=self._HEADINGS[col],
                               command=lambda c=col: self._sort_by(c))
@@ -219,6 +229,7 @@ class CommunityBrowser(tk.Toplevel):
             type_label = "🏛 Official" if kind == "official" else "🌐 Headless"
             version    = s.get("version", "unknown") or "unknown"
             region     = s.get("region", "unknown") or "unknown"
+            scene      = _scene_label(s)
             ping_ms    = s.get("_ping_ms")
             ping_text  = self._format_ping(ping_ms)
             row_tag    = "offline_row" if ping_ms == -1 else self._ping_tag(ping_ms)
@@ -230,7 +241,7 @@ class CommunityBrowser(tk.Toplevel):
             # since been re-sorted or re-filtered by a search keystroke.
             try:
                 self.tree.insert("","end", iid=address,
-                    values=(s.get("name","?"), address, players, locked, type_label, region, version, ping_text),
+                    values=(s.get("name","?"), address, players, locked, type_label, scene, region, version, ping_text),
                     tags=row_tags)
             except tk.TclError:
                 # Two listed servers sharing the exact same address would
@@ -238,7 +249,7 @@ class CommunityBrowser(tk.Toplevel):
                 # rather than losing the row entirely; that server just
                 # won't get live ping updates targeted at it specifically.
                 self.tree.insert("","end",
-                    values=(s.get("name","?"), address, players, locked, type_label, region, version, ping_text),
+                    values=(s.get("name","?"), address, players, locked, type_label, scene, region, version, ping_text),
                     tags=row_tags)
 
         if not self._servers:
