@@ -17,6 +17,7 @@ from tavern_shared.mod_install import (
     _detect_exe_arch, _melonloader_installed, _install_melonloader,
     _melonloader_status, _tavernlib_status, _install_tavernlib,
     _circuitsvoicechat_status, _install_circuitsvoicechat,
+    _tavernessentials_status, _install_tavernessentials,
 )
 
 class ModsWindow(tk.Toplevel):
@@ -68,6 +69,10 @@ class ModsWindow(tk.Toplevel):
         self._cvc_btn = self._mod_row(
             "CircuitsVoiceChat", "Proximity voice chat for players on this server.",
             self._on_circuitsvoicechat_click)
+        self._te_btn = self._mod_row(
+            "TavernEssentials",
+            "A framework to restore the original main menu functionality as well as plenty of social features and more - created by Shadow!",
+            self._on_tavernessentials_click)
 
         tk.Label(self, text="More mods will be manageable from here later.",
                  bg=BG, fg=MUTED, font=("Segoe UI",8,"italic")
@@ -116,21 +121,28 @@ class ModsWindow(tk.Toplevel):
         "current": "Up to date.",
     }
 
-    def _refresh_states(self):
-        self._status.set("Checking status…")
+    def _refresh_states(self, keep_status=None):
+        self._status.set(keep_status or "Checking status…")
         def worker():
             ml = _melonloader_status(self._game_dir)
             tl = _tavernlib_status(self._game_dir)
             cvc = _circuitsvoicechat_status(self._game_dir)
-            self.after(0, lambda: self._apply_states(ml, tl, cvc))
+            te = _tavernessentials_status(self._game_dir)
+            self.after(0, lambda: self._apply_states(ml, tl, cvc, te, keep_status))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_states(self, ml_state, tl_state, cvc_state):
+    def _apply_states(self, ml_state, tl_state, cvc_state, te_state, keep_status=None):
         self._apply_row_state(self._ml_btn, ml_state)
         self._apply_row_state(self._tl_btn, tl_state)
         self._apply_row_state(self._cvc_btn, cvc_state)
-        self._status.set("")
+        self._apply_row_state(self._te_btn, te_state)
+        self._status.set(keep_status or "")
+        self._fit_height()  # a long install error needs room to be readable
         if self._on_status_change: self._on_status_change()
+
+    def _fit_height(self):
+        self.update_idletasks()
+        self.geometry(f"520x{self.winfo_reqheight()}")
 
     def _apply_row_state(self, btn, state):
         dot, color, text = self._STATE_STYLE[state]
@@ -146,6 +158,7 @@ class ModsWindow(tk.Toplevel):
         self._ml_btn.config(state=state)
         self._tl_btn.config(state=state)
         self._cvc_btn.config(state=state)
+        self._te_btn.config(state=state)
         self._status.set(msg)
 
     def _on_melonloader_click(self):
@@ -164,7 +177,8 @@ class ModsWindow(tk.Toplevel):
                     lambda m: self.after(0, lambda: self._status.set(m)))
                 self.after(0, lambda: self._finish_install(True, "MelonLoader installed."))
             except Exception as e:
-                self.after(0, lambda: self._finish_install(False, f"Install failed: {e}"))
+                msg = f"Install failed: {e}"  # e is gone by the time the callback runs
+                self.after(0, lambda: self._finish_install(False, msg))
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_tavernlib_click(self):
@@ -181,7 +195,8 @@ class ModsWindow(tk.Toplevel):
                     lambda m: self.after(0, lambda: self._status.set(m)))
                 self.after(0, lambda: self._finish_install(True, "TavernLib installed."))
             except Exception as e:
-                self.after(0, lambda: self._finish_install(False, f"Install failed: {e}"))
+                msg = f"Install failed: {e}"  # e is gone by the time the callback runs
+                self.after(0, lambda: self._finish_install(False, msg))
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_circuitsvoicechat_click(self):
@@ -198,10 +213,31 @@ class ModsWindow(tk.Toplevel):
                     lambda m: self.after(0, lambda: self._status.set(m)))
                 self.after(0, lambda: self._finish_install(True, "CircuitsVoiceChat installed."))
             except Exception as e:
-                self.after(0, lambda: self._finish_install(False, f"Install failed: {e}"))
+                msg = f"Install failed: {e}"  # e is gone by the time the callback runs
+                self.after(0, lambda: self._finish_install(False, msg))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_tavernessentials_click(self):
+        if self._busy: return
+        if not _melonloader_installed(self._game_dir):
+            messagebox.showwarning("Install MelonLoader first",
+                "TavernEssentials is a MelonLoader mod — install MelonLoader above first.", parent=self)
+            return
+        self._set_busy(True, "Installing TavernEssentials…")
+
+        def worker():
+            try:
+                result = _install_tavernessentials(self._game_dir,
+                    lambda m: self.after(0, lambda: self._status.set(m)))
+                done = ("TavernEssentials is already up to date." if result == "current"
+                        else "TavernEssentials installed.")
+                self.after(0, lambda: self._finish_install(True, done))
+            except Exception as e:
+                msg = f"Install failed: {e}"  # e is gone by the time the callback runs
+                self.after(0, lambda: self._finish_install(False, msg))
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_install(self, ok, msg):
         self._set_busy(False, msg)
-        self._refresh_states()
+        self._refresh_states(keep_status=msg)
 
