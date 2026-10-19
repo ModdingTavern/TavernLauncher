@@ -23,6 +23,10 @@ class SessionTransport:
     def handle(self, raw):
         try:
             message = json.loads(raw)
+            if message.get('type') == 'SystemMessage' and str(message.get('data', '')).startswith('Prefabulator access revoked'):
+                self.client.disconnect()
+                self.close()
+                return
             if message.get('type') == 'CommandResult':
                 with self.lock:
                     request = self.pending.get(message.get('commandId'))

@@ -8,11 +8,12 @@ from tkinter import filedialog, messagebox
 from client.core.config import load_cfg
 from client.core.tavernkeeper.window import TavernKeeperWindow
 from client.core.addon_hooks import register_launcher_action, register_before_launch_hook
+from .release import ensure_runtime
 from tavern_shared.paths import _tavern_data_dir
 from tavern_shared.theme import BG, PARCH, MUTED, _btn
-from .runtime import Bridge, install
+from .runtime import Bridge, install, SessionTransport
 from .settings import Settings
-from .release import ensure_runtime
+from .access import AccessWindow, request as access_request
 from tavern_shared.ws_console_client import WsConsoleClient
 
 _active = None
@@ -110,8 +111,23 @@ def build(parent, window):
             status.set('Saved token removed. Enter it in Prefabulator next session. Your address is still saved.')
         except OSError:
             status.set('Could not remove saved token. Check your user settings folder permissions.')
-    _btn(parent, 'Forget saved console token', forget_token).pack(anchor='w', padx=12, pady=6)
+    _btn(parent, 'Forget saved access token', forget_token).pack(anchor='w', padx=12, pady=6)
+    management_transport = SessionTransport(window._ws_client)
+    owner_button = _btn(parent, 'Manage Admin Access (owner)', lambda: AccessWindow(window, management_transport))
+    def check_owner():
+        def check():
+            try:
+                result = access_request(management_transport, 'self')
+                window.after(0, lambda: access_ready(result))
+            except Exception as error:
+                window.after(0, lambda e=str(error): status.set(e))
+        threading.Thread(target=check, daemon=True).start()
+    def access_ready(result):
+        if result.get('owner') is True:
+            owner_button.pack(anchor='w', padx=12, pady=6)
     window.after(0, start_editor)
+    window.after(500, check_owner)
+    window.bind('<Destroy>', lambda event: management_transport.close() if event.widget is window else None, add='+')
 
     # Toplevel destruction also happens on disconnect/closing the launcher.
     def destroyed(event):
@@ -137,6 +153,8 @@ class PrefabulatorWindow(TavernKeeperWindow):
         def relabel(widget):
             if isinstance(widget, tk.Label) and 'TavernKeeper' in str(widget.cget('text')):
                 widget.configure(text='Prefabulator')
+            if isinstance(widget, tk.Label) and str(widget.cget('text')) == 'CONSOLE TOKEN':
+                widget.configure(text='ACCESS TOKEN (owner console token or personal admin token)')
             for child in widget.winfo_children():
                 relabel(child)
         relabel(self)
@@ -147,7 +165,7 @@ class PrefabulatorWindow(TavernKeeperWindow):
             self.v_token.set(_preferences.token(saved))
         except Exception:
             self._connect_status.set('Saved token unavailable. Enter it again.')
-        tk.Checkbutton(self, text='Save console token and auto-connect when I launch this server',
+        tk.Checkbutton(self, text='Save my access token and auto-connect when I launch this server',
                        variable=self.v_remember, command=self._remember_changed,
                        bg=BG, fg=PARCH, selectcolor=BG, wraplength=390).pack(fill='x', padx=20)
         tk.Label(self, text='Server address is remembered. Saved tokens are encrypted for this Windows account.',
@@ -174,7 +192,7 @@ class PrefabulatorWindow(TavernKeeperWindow):
     def _connect_succeeded(self):
         for child in list(self.winfo_children()):
             child.destroy()
-        self.geometry('720x540')
+        self.geometry('720x620')
         self.minsize(600, 500)
         build(self, self)
 

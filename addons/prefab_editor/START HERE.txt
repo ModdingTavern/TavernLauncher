@@ -3,8 +3,8 @@ PREFABULATOR
 This source integration targets Tavern Launcher 1.8.5.
 
 Enable Prefabulator in the client launcher Addons window and restart the launcher.
-Click Prefabulator on the main launcher. Enter the server address and owner's
-console token. The address is remembered. Save console token is optional and
+Click Prefabulator on the main launcher. Enter the server address and your
+access token (owner console token or personal token). The address is remembered. Save my access token is optional and
 uses Windows account encryption; it enables auto-connect when launching that
 server through Tavern.
 
@@ -19,3 +19,8 @@ Mods folder and restarts the server. The server requires a working Tavern
 remote console. Never share the console token publicly.
 
 Source and releases: https://github.com/calebv2/ATT-Prefab-Editor
+
+Owners: connect with your owner console token and use Manage Admin Access to
+create named personal tokens, choose tabs, update permissions or revoke access.
+Give each admin their personal token; keep the owner console token private.
+Both player and server packages must be 1.0.6 or newer.
