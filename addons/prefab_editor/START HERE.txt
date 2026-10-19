@@ -1,5 +1,7 @@
 PREFABULATOR
 
+This source integration targets Tavern Launcher 1.8.5.
+
 Enable Prefabulator in the client launcher Addons window and restart the launcher.
 Click Prefabulator on the main launcher. Enter the server address and owner's
 console token. The address is remembered. Save console token is optional and
