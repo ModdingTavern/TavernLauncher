@@ -1,0 +1,11 @@
+{
+  "name": "Prefabulator (Player Add-on + Mod)",
+  "author": "ATT Prefab Editor",
+  "version": "1.0.5",
+  "required_mods_title": [
+    "Player mod (included; install from Prefabulator)"
+  ],
+  "required_mods_filename": [
+    "PrefabEditor.dll"
+  ]
+}

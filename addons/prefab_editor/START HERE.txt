@@ -1,0 +1,19 @@
+PREFABULATOR
+
+Enable Prefabulator in the client launcher Addons window and restart the launcher.
+Click Prefabulator on the main launcher. Enter the server address and owner's
+console token. The address is remembered. Save console token is optional and
+uses Windows account encryption; it enables auto-connect when launching that
+server through Tavern.
+
+Close the game and click Install / update player mod. A source-only installation
+downloads the pinned runtime on first use (about 144 MiB); keep internet access
+available. The full Player-Addon-and-Mod release includes everything for offline
+installation. Click Connect, wait for CONNECTED, launch the game, and press F1.
+Keep Tavern Launcher open while playing. All editing happens in game.
+
+The server owner installs the separate Server-Mod-Only release into the SERVER
+Mods folder and restarts the server. The server requires a working Tavern
+remote console. Never share the console token publicly.
+
+Source and releases: https://github.com/calebv2/ATT-Prefab-Editor

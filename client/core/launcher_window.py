@@ -47,6 +47,7 @@ from client.core.auth import (
     build_tokens, _headless_user_id, register_whitelist_application, ticket_request,
 )
 from client.core.launch_hooks import run_post_auth_hooks
+from client.core.addon_hooks import build_launcher_actions, run_before_launch_hooks
 from client.core.community_browser import CommunityBrowser
 from client.core.server_list_panel import ServerListPanel
 from client.core.tickets_window import TicketsWindow
@@ -187,6 +188,8 @@ class ClientLauncher(tk.Tk):
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=(0,6))
         _btn(btn_row_dest, "🧩 TavernKeeper",     self._open_tavernkeeper,
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
+
+        build_launcher_actions(btn_row_dest, self)
 
         # ── Action area ──────────────────────────────────────────────────────
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=20, pady=6)
@@ -1047,6 +1050,7 @@ class ClientLauncher(tk.Tk):
             # by the Show MelonLoader toggle: hiding it means redirecting the
             # child's std handles at creation time (which is what makes it
             # skip AllocConsole); showing it means leaving them alone.
+            run_before_launch_hooks(host, exe, self._print)
             proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
                                     **self._popen_console_kwargs())
             self._print(f"Game running (PID {proc.pid})", "ok")
@@ -1113,6 +1117,7 @@ class ClientLauncher(tk.Tk):
 
         self._print(f"Launching on {platform or 'default'}…", "warn")
         try:
+            run_before_launch_hooks(host, exe, self._print)
             proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
                                     **self._popen_console_kwargs())
             self._print(f"Game running (PID {proc.pid})", "ok")
