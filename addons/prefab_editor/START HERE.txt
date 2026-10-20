@@ -24,3 +24,7 @@ Owners: connect with your owner console token and use Manage Admin Access to
 create named personal tokens, choose tabs, update permissions or revoke access.
 Give each admin their personal token; keep the owner console token private.
 Both player and server packages must be 1.0.6 or newer.
+
+In 1.0.7, linked teleporter destination chunks start loading on touch and
+the player travels after the platform animation finishes. The server owner
+must install Server-Mod-Only 1.0.7 and restart the server for this fix.
