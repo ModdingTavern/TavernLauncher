@@ -16,7 +16,9 @@ Keep Tavern Launcher open while playing. All editing happens in game.
 
 The server owner installs the separate Server-Mod-Only release into the SERVER
 Mods folder and restarts the server. The server requires a working Tavern
-remote console. Never share the console token publicly.
+remote console. Anyone with the owner console token has full console access.
+You cannot revoke just one person's access while they still know that shared
+token. Keep it private and give other admins personal tokens instead.
 
 Source and releases: https://github.com/calebv2/ATT-Prefab-Editor
 

@@ -8,6 +8,6 @@ Enable Prefabulator in the client Addons window and restart the launcher. Its ma
 
 Follow [the player setup instructions](addons/prefab_editor/START%20HERE.txt). Source checkouts download a checksum-pinned runtime on first use. The [full player package and server mod](https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.7) and [mod source](https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.7) are published separately. The server needs PrefabEditorCore.dll and a working Tavern remote console.
 
-Owners can create named personal admin tokens with allowed tabs from Manage Admin Access in Prefabulator. Revocation disconnects active sessions; the server enforces each profile on every command. Both player and server packages must be updated to 1.0.6.
+Owners can create named personal admin tokens with allowed tabs from Manage Admin Access in Prefabulator. Revocation disconnects active personal sessions; the server enforces each profile on every command. Anyone given the owner console token has full console access, and one person's access cannot be revoked while they still know that shared token. Give other admins personal tokens instead. Both player and server packages must be updated to 1.0.7.
 
 Release 1.0.7 fixes linked teleporter timing in server core 1.6.1: destination loading starts on contact and player movement waits for the platform animation to finish.
