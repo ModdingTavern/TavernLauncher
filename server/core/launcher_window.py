@@ -34,9 +34,10 @@ from tavern_shared.log_archive import archive_log_now, should_auto_archive
 
 from server.core.data_store import (
     load_cfg, save_cfg, CONFIG_FILE, GAME_LOG_PATH, DISCORD_URL,
-    CONSOLE_TOKEN_FILE, PLAYERS_SAVE, load_server_settings, save_server_settings,
+    CONSOLE_TOKEN_FILE, PLAYERS_SAVE, SERVER_DATA_DIR, load_server_settings, save_server_settings,
     _load_whitelist_requests, _tickets_needing_owner_attention,
 )
+from server.core.server_backup import backup_due, create_backup, prune_backups
 from tavern_shared.flashing import start_flashing_button
 from server.core.auth_service import (
     start_auth_service, AUTH_PORT, build_console_token, build_server_tokens,
@@ -235,6 +236,12 @@ class ServerLauncher(tk.Tk):
                        activebackground=BG, activeforeground=AMBER,
                        padx=0, pady=0, borderwidth=0, highlightthickness=0,
                        font=("Segoe UI",7)).pack(side="left", padx=(8,0))
+        self.v_tutorial_scene = tk.BooleanVar(value=ss_for_quest_scene.get("tutorial_scene", False))
+        tk.Checkbutton(df, text="Tutorial Scene", variable=self.v_tutorial_scene,
+                       command=self._save_tutorial_scene, bg=BG, fg=MUTED, selectcolor=SURF,
+                       activebackground=BG, activeforeground=AMBER,
+                       padx=0, pady=0, borderwidth=0, highlightthickness=0,
+                       font=("Segoe UI",7)).pack(side="left", padx=(8,0))
         _btn(df, "🗑 Wipe Cache", self._wipe_cache,
              font=("Segoe UI",7), pady=2, padx=6).pack(side="right")
         self._addons_btn = _btn(df, "🧩 Addons", self._open_addons,
@@ -391,8 +398,19 @@ class ServerLauncher(tk.Tk):
         something a connecting client needs to learn about via the auth
         handshake, so it has to live in server_settings.json rather than
         this launcher's own local cfg."""
+        if self.v_quest_scene.get():
+            self.v_tutorial_scene.set(False)
+        self._save_scenes()
+
+    def _save_tutorial_scene(self):
+        if self.v_tutorial_scene.get():
+            self.v_quest_scene.set(False)
+        self._save_scenes()
+
+    def _save_scenes(self):
         ss = load_server_settings()
         ss["quest_scene"] = self.v_quest_scene.get()
+        ss["tutorial_scene"] = self.v_tutorial_scene.get()
         save_server_settings(ss)
 
     def _wipe_cache(self):
@@ -735,7 +753,9 @@ class ServerLauncher(tk.Tk):
         args += ["/fly", "/launcherauth", "/start_server", "-1", "false", str(port)]
         if self.v_debug_helper.get():
             args.append("/debug_helper")
-        if self.v_quest_scene.get():
+        if self.v_tutorial_scene.get():
+            args.append("/tutorialScene")
+        elif self.v_quest_scene.get():
             args.append("/questScene")
         self._print(f"Opening server on port {port}…", "warn")
         try:
@@ -756,6 +776,7 @@ class ServerLauncher(tk.Tk):
             self.after_cancel(self._reboot_after_id)
         self._reboot_after_id = None
         self._schedule_auto_reboot()
+        self._schedule_backups()
 
     def _watch(self):
         time.sleep(8)
@@ -770,6 +791,7 @@ class ServerLauncher(tk.Tk):
         if getattr(self, "_reboot_after_id", None):
             self.after_cancel(self._reboot_after_id)
             self._reboot_after_id = None
+        self._cancel_backups()
         if self._proc:
             try: self._proc.terminate(); self._print("Closing server…", "warn")
             except Exception as e: self._print(f"Stop failed: {e}", "err")
@@ -813,6 +835,58 @@ class ServerLauncher(tk.Tk):
         else:
             # Server already stopped — just reschedule for next time
             self._schedule_auto_reboot()
+
+    BACKUP_CHECK_MS = 60 * 1000
+
+    def _schedule_backups(self):
+        """Called when the server starts. Once a minute while it runs, checks
+        whether a backup is due. Settings are re-read each time, so changing
+        them in Advanced Settings takes effect without restarting the server."""
+        self._cancel_backups()
+        ss = load_server_settings()
+        hours = ss.get("server_backup_time", 0)
+        if hours > 0:
+            keep = ss.get("server_backup_max_backups", 0)
+            self._print(f"Automatic backups every {hours:g}h"
+                        + (f", keeping the newest {keep}." if keep else "."), "dim")
+        self._backup_job = self.after(self.BACKUP_CHECK_MS, self._backup_tick)
+
+    def _cancel_backups(self):
+        job = getattr(self, "_backup_job", None)
+        if job:
+            try: self.after_cancel(job)
+            except Exception: pass
+        self._backup_job = None
+
+    def _backup_tick(self):
+        self._backup_job = None
+        if not (self._proc and self._proc.poll() is None):
+            return  # the server has stopped; nothing to back up on a timer
+        ss = load_server_settings()
+        hours = ss.get("server_backup_time", 0)
+        if hours > 0 and not getattr(self, "_backup_busy", False) \
+                and backup_due(SERVER_DATA_DIR, hours):
+            self._backup_busy = True
+            threading.Thread(target=self._do_backup,
+                             args=(ss.get("server_backup_max_backups", 0),),
+                             daemon=True).start()
+        self._backup_job = self.after(self.BACKUP_CHECK_MS, self._backup_tick)
+
+    def _do_backup(self, max_backups):
+        try:
+            path, added, skipped = create_backup(SERVER_DATA_DIR)
+            size = os.path.getsize(path)
+            size_text = f"{size / (1024 * 1024):.1f} MB" if size >= 1024 * 1024 else f"{max(1, size // 1024)} KB"
+            self._print(f"Backup saved: {os.path.basename(path)} ({size_text}, {added} files)", "ok")
+            if skipped:
+                self._print(f"{len(skipped)} file(s) were in use and left out of the backup.", "warn")
+            removed = prune_backups(SERVER_DATA_DIR, max_backups)
+            if removed:
+                self._print(f"Removed {len(removed)} old backup(s) (keeping {max_backups}).", "dim")
+        except Exception as e:
+            self._print(f"Backup failed: {e}", "err")
+        finally:
+            self._backup_busy = False
 
     def _set_running(self, on):
         def _do():

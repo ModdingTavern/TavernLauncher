@@ -24,7 +24,7 @@ from server.core.data_store import (
     load_cfg, load_server_settings, _throttle_ok, _record_fail,
     _pw_throttle_ok, _record_pw_fail, _read_live_player_status,
     _handle_ticket_request, _is_blacklisted, _is_whitelisted,
-    _load_users, _save_users, _users_lock, BASE_USER_ID,
+    _load_users, _save_users, _users_lock, BASE_USER_ID, UsersSaveError,
     CONSOLE_TOKEN_FILE, USERNAME_MAX_LEN, _is_valid_name,
     MAX_ACCOUNTS_PER_IP, PW_FAIL_LIMIT, _pw_fail_counts,
     _load_whitelist_requests, _save_whitelist_requests,
@@ -315,7 +315,16 @@ def _handle_auth(conn, addr, log_fn):
 
         log_fn(f"'{username}' (ID {user_id}) from {ip}", "ok")
         conn.sendall(json.dumps({"status":"ok","user_id":user_id,
-                                  "quest_scene_required": bool(ss.get("quest_scene", False))}).encode())
+                                  "quest_scene_required": bool(ss.get("quest_scene", False)),
+                                  "tutorial_scene_required": bool(ss.get("tutorial_scene", False))}).encode())
+    except UsersSaveError as e:
+        # Never tell the player "ok" for an account that wasn't actually saved
+        # -- the next player would be handed the same user ID.
+        log_fn(f"Could not save accounts: {e}", "err")
+        try: conn.sendall(json.dumps({"status":"error",
+            "message":"The server couldn't save your account right now. Please try again, "
+                      "and tell the server owner if it keeps happening."}).encode())
+        except: pass
     except Exception as e:
         try: conn.sendall(json.dumps({"status":"error","message":str(e)}).encode())
         except: pass

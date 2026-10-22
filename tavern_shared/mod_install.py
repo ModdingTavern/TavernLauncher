@@ -1,6 +1,6 @@
 """
-Mod installation logic (MelonLoader, TavernLib, CircuitsVoiceChat) shared
-by both apps -- both need Install/Update buttons for the same three mods,
+Mod installation logic (MelonLoader, TavernLib, CircuitsVoiceChat, TavernEssentials)
+shared by both apps -- both need Install/Update buttons for the same mods,
 and this was previously duplicated near-verbatim between att_client.py
 and att_server.py. Client's copies used throughout (diff confirmed only
 cosmetic drift against the server's).
@@ -8,7 +8,9 @@ cosmetic drift against the server's).
 import os
 import sys
 import time
+import html
 import json
+import re
 import shutil
 import socket
 import hashlib
@@ -282,6 +284,187 @@ def _install_circuitsvoicechat(game_dir, on_progress):
     _save_mod_meta(game_dir, meta)
 
 
+TAVERNESSENTIALS_REPO = "ModdingTavern/TavernEssentials"
+TAVERNESSENTIALS_FILENAME = "TavernEssentials.dll"
+TAVERNESSENTIALS_DEST_DIR = "Mods"
+
+
+def _get_tavernessentials_latest_tag():
+    loc = _get_redirect_location(f"https://github.com/{TAVERNESSENTIALS_REPO}/releases/latest")
+    if not loc:
+        return None
+    return loc.rstrip("/").split("/")[-1]
+
+
+def _tavernessentials_bundled_path():
+    """The copy shipped in Patch/. TavernEssentials.dll is used if it's there,
+    but a versioned name like TavernEssentials-v1.2.dll is accepted too."""
+    patch_dir = os.path.join(_app_dir(), "Patch")
+    exact = os.path.join(patch_dir, TAVERNESSENTIALS_FILENAME)
+    if os.path.isfile(exact):
+        return exact
+    try:
+        for name in sorted(os.listdir(patch_dir)):
+            low = name.lower()
+            if low.startswith("tavernessentials") and low.endswith(".dll"):
+                return os.path.join(patch_dir, name)
+    except OSError:
+        pass
+    return None
+
+
+def _tavernessentials_installed(game_dir):
+    return os.path.isfile(os.path.join(game_dir, TAVERNESSENTIALS_DEST_DIR, TAVERNESSENTIALS_FILENAME))
+
+
+def _tavernessentials_status(game_dir):
+    """'missing', 'outdated', 'unknown' or 'current', same as the other mods."""
+    if not _tavernessentials_installed(game_dir):
+        return "missing"
+    installed_tag = _load_mod_meta(game_dir).get("tavernessentials_tag")
+    if not installed_tag or installed_tag.startswith("bundled:"):
+        return "unknown"
+    try:
+        latest = _get_tavernessentials_latest_tag()
+    except Exception:
+        return "unknown"
+    if not latest:
+        return "unknown"
+    return "current" if latest == installed_tag else "outdated"
+
+
+def _release_asset_urls_from_page(repo, tag):
+    """Every file attached to a release, whatever it's called, read from the
+    release's asset list on github.com. Unlike the API this has no tight rate limit."""
+    req = urllib.request.Request(
+        f"https://github.com/{repo}/releases/expanded_assets/{tag}",
+        headers={"User-Agent": "TavernLauncher/1.0"})
+    with _force_ipv4():
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            page = resp.read().decode("utf-8", "replace")
+    return ["https://github.com" + html.unescape(path)
+            for path in re.findall(r'href="(/[^"]+/releases/download/[^"]+)"', page)]
+
+
+def _release_asset_urls_from_api(repo, tag):
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+        headers={"User-Agent": "TavernLauncher/1.0", "Accept": "application/vnd.github+json"})
+    with _force_ipv4():
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            release = json.load(resp)
+    return [a["browser_download_url"] for a in release.get("assets", []) if a.get("browser_download_url")]
+
+
+def _release_zip_urls(repo, tag, prefer):
+    """The .zip files attached to a release, whatever they're named, with any
+    whose name contains `prefer` tried first. The release page is read first;
+    the rate limited API is only asked if that finds nothing that works out."""
+    def name_of(u):  # just the file name -- the URL path also contains the repo name
+        return urllib.parse.unquote(urlparse(u).path.rsplit("/", 1)[-1]).lower()
+    seen = set()
+    for lookup in (_release_asset_urls_from_page, _release_asset_urls_from_api):
+        try:
+            urls = lookup(repo, tag)
+        except Exception:
+            continue
+        zips = [u for u in urls if name_of(u).endswith(".zip")]
+        zips.sort(key=lambda u: prefer not in name_of(u))
+        for u in zips:
+            if u not in seen:
+                seen.add(u)
+                yield u
+
+
+def _tavernessentials_zip_urls(tag):
+    prefer = os.path.splitext(TAVERNESSENTIALS_FILENAME)[0].lower()
+    return _release_zip_urls(TAVERNESSENTIALS_REPO, tag, prefer)
+
+
+def _fetch_tavernessentials_dll(url, on_progress, have_bundled):
+    """Downloads one release zip and returns TavernEssentials.dll's bytes."""
+    tmp_zip = os.path.join(tempfile.gettempdir(), "tavern_tavernessentials_dl.zip")
+    try:
+        if have_bundled:
+            _download_with_progress(url, tmp_zip, on_progress, connect_timeout=8, max_total_seconds=15)
+        else:
+            _download_with_progress(url, tmp_zip, on_progress)
+        on_progress("Extracting TavernEssentials…")
+        with _open_zip_with_retry(tmp_zip) as zf:
+            match = _find_zip_entry(zf, TAVERNESSENTIALS_FILENAME)
+            if not match:
+                raise RuntimeError(f"The downloaded release zip didn't contain {TAVERNESSENTIALS_FILENAME}.")
+            return zf.read(match)
+    finally:
+        try: os.remove(tmp_zip)
+        except Exception: pass
+
+
+def _install_tavernessentials(game_dir, on_progress):
+    """Fetches the latest release from GitHub and puts TavernEssentials.dll in
+    Mods/. Falls back to the copy in Patch/ if GitHub can't be reached or the
+    download doesn't work out. Returns 'current' if the DLL on GitHub is
+    identical to the one already installed (nothing is rewritten), else 'installed'."""
+    bundled = _tavernessentials_bundled_path()
+
+    tag = None
+    try: tag = _get_tavernessentials_latest_tag()
+    except Exception: pass
+
+    dll_bytes, last_error = None, None
+    if tag:  # no tag means GitHub isn't answering at all, so go straight to the fallback
+        started = time.time()
+        for url in _tavernessentials_zip_urls(tag):
+            try:
+                dll_bytes = _fetch_tavernessentials_dll(url, on_progress, bool(bundled))
+                break
+            except Exception as e:
+                last_error = e
+                if bundled and time.time() - started > 10:
+                    break  # slow failure, not a quick 404 -- don't keep the user waiting
+
+    if dll_bytes is None:
+        if not bundled:
+            detail = f"\n\n{last_error}" if last_error else ""
+            raise RuntimeError("Couldn't get TavernEssentials from GitHub, and no bundled "
+                               "copy was found in Patch/ either." + detail)
+        on_progress("Couldn't reach GitHub — using the version bundled with this launcher…")
+
+    dest_dir = os.path.join(game_dir, TAVERNESSENTIALS_DEST_DIR)
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_path = os.path.join(dest_dir, TAVERNESSENTIALS_FILENAME)
+    if dll_bytes is not None:
+        expected_hash = hashlib.sha256(dll_bytes).hexdigest()
+        try:
+            unchanged = os.path.isfile(dest_path) and _sha256_file(dest_path) == expected_hash
+        except OSError:
+            unchanged = False
+        if unchanged:
+            meta = _load_mod_meta(game_dir)
+            meta["tavernessentials_tag"] = tag
+            _save_mod_meta(game_dir, meta)
+            return "current"
+        with open(dest_path, "wb") as f:
+            f.write(dll_bytes)
+    else:
+        expected_hash = _sha256_file(bundled)
+        shutil.copy2(bundled, dest_path)
+    # Controlled Folder Access can silently no-op a write; verify by reading back.
+    if not os.path.isfile(dest_path) or _sha256_file(dest_path) != expected_hash:
+        raise RuntimeError(
+            f"{TAVERNESSENTIALS_FILENAME} was written without any error, but checking it afterward "
+            "shows it doesn't match what was just downloaded/copied. This usually means "
+            "something on this PC silently blocked the write — most commonly Windows' "
+            "Controlled Folder Access, or antivirus real-time protection. Try adding an "
+            "exclusion for the game's install folder in Windows Security (or your "
+            "antivirus), or temporarily disabling Controlled Folder Access, then try again.")
+
+    meta = _load_mod_meta(game_dir)
+    meta["tavernessentials_tag"] = tag if dll_bytes is not None else "bundled:local"
+    _save_mod_meta(game_dir, meta)
+    return "installed"
+
+
 @contextlib.contextmanager
 def _force_ipv4():
     """Temporarily makes socket.getaddrinfo only return IPv4 results.
@@ -419,6 +602,9 @@ def _find_zip_entry(zf, wanted_filename):
     prefix + same extension instead means a new release just works without
     ever needing a code change here. Returns the zip entry's real name (for
     reading), or None if nothing matches."""
+    for n in zf.namelist():
+        if os.path.basename(n).lower() == wanted_filename.lower():
+            return n
     stem, ext = os.path.splitext(wanted_filename)
     stem, ext = stem.lower(), ext.lower()
     for n in zf.namelist():
@@ -598,8 +784,8 @@ def _tavernlib_status(game_dir):
 
 
 def _mods_need_attention(game_dir):
-    """True if either required mod is missing/outdated, or the optional
-    CircuitsVoiceChat is outdated — the trigger for flashing the main
+    """True if either required mod is missing/outdated, or an optional mod
+    (CircuitsVoiceChat, TavernEssentials) is outdated — the trigger for flashing the main
     window's Mods button. Deliberately not "missing" for the optional mod:
     not having opted into it is a normal, expected state, not something
     that needs attention. Network failures during the update checks never
@@ -607,5 +793,6 @@ def _mods_need_attention(game_dir):
     purely local, always-reliable check) does that unconditionally."""
     return (_melonloader_status(game_dir) in ("missing", "outdated") or
             _tavernlib_status(game_dir)   in ("missing", "outdated") or
-            _circuitsvoicechat_status(game_dir) == "outdated")
+            _circuitsvoicechat_status(game_dir) == "outdated" or
+            _tavernessentials_status(game_dir) == "outdated")
 

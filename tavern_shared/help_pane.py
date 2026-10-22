@@ -174,6 +174,8 @@ class HelpTab(tk.Toplevel):
         anchor.bind("<Destroy>", self._on_anchor_destroy, add="+")
 
     def _on_anchor_configure(self, event=None):
+        if event is not None and event.widget is not self._anchor:
+            return
         self._reposition()
         if self._dock is not None:
             self._dock.reposition()

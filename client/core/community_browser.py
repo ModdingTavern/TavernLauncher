@@ -1,7 +1,7 @@
 """Browses the public community server list."""
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
-import threading, time, json, urllib.request
+import os, re, threading, time, json, urllib.request
 
 from tavern_shared.theme import (
     BG, SURF, SURF2, BORDER, AMBER, AMBERDIM, PARCH, MUTED, GREEN, RED, CYAN,
@@ -9,19 +9,57 @@ from tavern_shared.theme import (
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon
 
-from client.core.config import load_cfg, save_cfg, COMMUNITY_API
+from client.core.config import load_cfg, save_cfg, COMMUNITY_API, CONFIG_FILE
 from client.core.auth import ping_server
 
+def _scene_label(s):
+    # Tutorial wins over quest, same as the server launcher and TavernLib.
+    if s.get("tutorial"):
+        return "Tutorial"
+    if s.get("quest"):
+        return "Quest"
+    return "Normal"
+
+
+DEFAULT_SORT = "default"
+_SECTIONS = (("tutorial", "Tutorial Servers"), ("normal", "Normal Servers"), ("quest", "Quest Servers"))
+_SMALL_TABLE_ROWS = 3  # the tutorial and quest tables scroll past this many rows
+
+
+def _scene_group(s):
+    label = _scene_label(s)
+    return 0 if label == "Tutorial" else 2 if label == "Quest" else 1
+
+
+def _version_key(version):
+    # Newest first. Numeric parts compare as numbers (1.10 > 1.5) and are
+    # padded so 1.5 and 1.5.0 tie. No usable version sorts last.
+    nums = [int(n) for n in re.findall(r"\d+", str(version or ""))][:6]
+    if not nums:
+        return (1, ())
+    nums += [0] * (6 - len(nums))
+    return (0, tuple(-n for n in nums))
+
+
+def _default_sort_key(s):
+    group = _scene_group(s)
+    name = str(s.get("name") or "").casefold()
+    if group == 0:
+        return (0, name)
+    return (group, _version_key(s.get("version")), name)
+
+
 class CommunityBrowser(tk.Toplevel):
-    _COLUMNS = ("name","address","players","locked","type","region","version","ping")
+    _COLUMNS = ("name","address","players","locked","type","scene","region","version","ping")
     _HEADINGS = {"name":"Name","address":"Address","players":"Players",
-                 "locked":"","type":"Type","region":"Region","version":"Version","ping":"Ping"}
+                 "locked":"","type":"Type","scene":"Scene","region":"Region","version":"Version","ping":"Ping"}
     _SORT_KEYS = {
         "name":    lambda s: s.get("name","").lower(),
         "address": lambda s: s.get("address","").lower(),
         "players": lambda s: s.get("player_count",0),
         "locked":  lambda s: bool(s.get("has_password")),
         "type":    lambda s: s.get("kind","official"),
+        "scene":   lambda s: _scene_label(s),
         "region":  lambda s: s.get("region","unknown").lower(),
         "version": lambda s: s.get("version","unknown").lower(),
         # Not-yet-checked (key absent) and confirmed-offline (-1) both sort
@@ -57,17 +95,38 @@ class CommunityBrowser(tk.Toplevel):
         _start_hidden(self)
         self.title("Community Servers")
         self.configure(bg=BG)
-        self.geometry("850x460")
-        self.resizable(False, False)
+        self.geometry("900x640")
+        self.resizable(False, True)
+        self.minsize(900, 580)
+        _set_window_icon(self)
         self._on_select = on_select
         self._servers   = []   # full list, straight from the API
-        self._visible    = []  # filtered + sorted subset actually shown
-        self._sort_col   = None
-        self._sort_reverse = False
+        self._groups = {key: [] for key, _t in _SECTIONS}       # filtered servers per table
+        self._row_servers = {key: {} for key, _t in _SECTIONS}  # per table: row id -> server
+        self._load_sort_pref()
         self._ping_sema  = threading.Semaphore(self._MAX_CONCURRENT_PINGS)
         self._build()
         self._refresh()
         _finish_dark_window(self)
+
+    def _load_sort_pref(self):
+        prefs = load_cfg().get("sort_prefs")
+        prefs = prefs if isinstance(prefs, dict) else {}
+        self._sort = {}  # table -> [column or "default", reverse]
+        for key, _title in _SECTIONS:
+            p = prefs.get(key)
+            col, reverse = DEFAULT_SORT, False
+            if isinstance(p, dict) and isinstance(p.get("col"), str) and p["col"] in self._SORT_KEYS:
+                col, reverse = p["col"], p.get("reverse") is True
+            self._sort[key] = [col, reverse]
+
+    def _save_sort_pref(self):
+        cfg = load_cfg()
+        if not cfg and os.path.exists(CONFIG_FILE):
+            return  # config exists but couldn't be read; writing now would wipe it
+        cfg["sort_prefs"] = {key: {"col": col, "reverse": reverse}
+                             for key, (col, reverse) in self._sort.items()}
+        save_cfg(cfg)
 
     def _build(self):
         h = tk.Frame(self, bg=SURF, height=44)
@@ -84,6 +143,9 @@ class CommunityBrowser(tk.Toplevel):
         tk.Entry(sf, textvariable=self.v_search, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10),
                  bd=6).pack(side="left", fill="x", expand=True, padx=(6,0))
+        self._default_sort_btn = _btn(sf, "Default Sorting", self._use_default_sort,
+                                      font=("Segoe UI",9), pady=4, padx=10)
+        self._default_sort_btn.pack(side="left", padx=(8,0))
 
         self._status = tk.StringVar(value="Fetching server list…")
         tk.Label(self, textvariable=self._status, bg=BG, fg=MUTED,
@@ -91,19 +153,24 @@ class CommunityBrowser(tk.Toplevel):
 
         lf = tk.Frame(self, bg=BG)
         lf.pack(fill="both", expand=True, padx=20, pady=(0,8))
-        self.tree = _mk_tree(lf, self._COLUMNS,
-                             [190,130,65,30,85,60,95,80], height=8, hscroll=True)
-        for col in self._COLUMNS:
-            self.tree.heading(col, text=self._HEADINGS[col],
-                              command=lambda c=col: self._sort_by(c))
-        # Whole-row text coloring by ping quality (see _PING_BUCKETS'
-        # comment for why this is row-level, not per-cell) -- offline
-        # reuses the app's own muted gray rather than a bucket color,
-        # since "unreachable" isn't a point on the good-to-bad gradient,
-        # it's a different state entirely.
-        for _threshold, tag, color in self._PING_BUCKETS:
-            self.tree.tag_configure(tag, foreground=color)
-        self.tree.tag_configure("offline_row", foreground=MUTED)
+        self._frames, self._titles, self._trees = {}, {}, {}
+        for key, _title in _SECTIONS:
+            frame = tk.Frame(lf, bg=BG)
+            title = tk.Label(frame, bg=BG, fg=AMBER, anchor="w", font=("Georgia", 9, "bold"))
+            title.pack(fill="x", pady=(8, 3))
+            tree = _mk_tree(frame, self._COLUMNS,
+                            [190,130,65,30,85,75,60,95,80], height=3, hscroll=False)
+            for col in self._COLUMNS:
+                tree.heading(col, text=self._HEADINGS[col],
+                             command=lambda k=key, c=col: self._sort_by(k, c))
+            # Whole-row text coloring by ping quality (Treeview can only color
+            # a whole row, not a single cell). Offline reuses the muted gray
+            # since "unreachable" isn't a point on the good-to-bad gradient.
+            for _threshold, tag, color in self._PING_BUCKETS:
+                tree.tag_configure(tag, foreground=color)
+            tree.tag_configure("offline_row", foreground=MUTED)
+            tree.bind("<<TreeviewSelect>>", lambda _e, k=key: self._on_tree_select(k))
+            self._frames[key], self._titles[key], self._trees[key] = frame, title, tree
 
         br = tk.Frame(self, bg=BG)
         br.pack(fill="x", padx=20, pady=(0,12))
@@ -116,7 +183,8 @@ class CommunityBrowser(tk.Toplevel):
 
     def _refresh(self):
         self._status.set("Fetching…")
-        for r in self.tree.get_children(): self.tree.delete(r)
+        for tree in self._trees.values():
+            for r in tree.get_children(): tree.delete(r)
         threading.Thread(target=self._fetch, daemon=True).start()
 
     def _fetch(self):
@@ -158,12 +226,13 @@ class CommunityBrowser(tk.Toplevel):
 
     def _update_ping_cell(self, srv):
         address = srv.get("address","")
-        if not self.tree.exists(address):
+        tree = self._trees[_SECTIONS[_scene_group(srv)][0]]
+        if not tree.exists(address):
             return  # filtered out of view, or window closed mid-ping
         ms = srv.get("_ping_ms")
-        self.tree.set(address, "ping", self._format_ping(ms))
+        tree.set(address, "ping", self._format_ping(ms))
         tag = "offline_row" if ms == -1 else self._ping_tag(ms)
-        self.tree.item(address, tags=(tag,) if tag else ())
+        tree.item(address, tags=(tag,) if tag else ())
 
     def _format_ping(self, ms):
         if ms is None:
@@ -182,13 +251,27 @@ class CommunityBrowser(tk.Toplevel):
                 return tag
         return self._PING_BUCKETS[-1][1]
 
-    def _sort_by(self, col):
-        if self._sort_col == col:
-            self._sort_reverse = not self._sort_reverse
+    def _sort_by(self, key, col):
+        state = self._sort[key]
+        if state[0] == col:
+            state[1] = not state[1]
         else:
-            self._sort_col = col
-            self._sort_reverse = False
-        self._populate()
+            state[0], state[1] = col, False
+        self._save_sort_pref()
+        self._fill_table(key)
+        self._update_default_btn()
+
+    def _use_default_sort(self):
+        for state in self._sort.values():
+            state[0], state[1] = DEFAULT_SORT, False
+        self._save_sort_pref()
+        for key, _title in _SECTIONS:
+            self._fill_table(key)
+        self._update_default_btn()
+
+    def _update_default_btn(self):
+        is_default = all(col == DEFAULT_SORT for col, _rev in self._sort.values())
+        self._default_sort_btn.config(text=("✓ " if is_default else "") + "Default Sorting")
 
     def _populate(self):
         query = self.v_search.get().strip().lower()
@@ -199,26 +282,62 @@ class CommunityBrowser(tk.Toplevel):
         else:
             visible = list(self._servers)
 
-        if self._sort_col:
-            key = self._SORT_KEYS[self._sort_col]
-            visible.sort(key=key, reverse=self._sort_reverse)
+        self._groups = {key: [] for key, _t in _SECTIONS}
+        for s in visible:
+            self._groups[_SECTIONS[_scene_group(s)][0]].append(s)
 
-        self._visible = visible
+        # Empty tutorial/quest tables are hidden; the normal table always
+        # stays so there's still a list (with headings) when nothing matches.
+        shown = [key for key, _t in _SECTIONS if self._groups[key]] or ["normal"]
+        for frame in self._frames.values():
+            frame.pack_forget()
+        for key, _title in _SECTIONS:
+            if key in shown:
+                if key == "normal":
+                    self._frames[key].pack(fill="both", expand=True)
+                else:
+                    self._frames[key].pack(fill="x")
+            self._fill_table(key)
+        self._update_default_btn()
 
-        for col in self._COLUMNS:
-            label = self._HEADINGS[col]
-            if col == self._sort_col:
-                label += " ▼" if self._sort_reverse else " ▲"
-            self.tree.heading(col, text=label)
+        if not self._servers:
+            self._status.set("No servers listed yet.")
+        elif query and not visible:
+            self._status.set(f"No servers match '{query}'.")
+        else:
+            self._status.set(f"{len(visible)} of {len(self._servers)} servers shown."
+                             if query else f"{len(self._servers)} servers listed.")
 
-        for r in self.tree.get_children(): self.tree.delete(r)
-        for s in self._visible:
+    def _fill_table(self, key):
+        tree, members = self._trees[key], self._groups[key]
+        col, reverse = self._sort[key]
+        if col == DEFAULT_SORT:
+            members = sorted(members, key=_default_sort_key)
+        else:
+            members = sorted(members, key=self._SORT_KEYS[col], reverse=reverse)
+
+        self._titles[key].config(text=f"{dict(_SECTIONS)[key]}  ({len(members)})")
+        if key != "normal":
+            tree.config(height=max(1, min(len(members), _SMALL_TABLE_ROWS)))
+
+        for c in self._COLUMNS:
+            label = self._HEADINGS[c]
+            if c == col:
+                label += " ▼" if reverse else " ▲"
+            tree.heading(c, text=label)
+
+        sel = tree.selection()
+        previous = self._row_servers[key].get(sel[0]) if sel else None
+        for r in tree.get_children(): tree.delete(r)
+        rows = self._row_servers[key] = {}
+        for s in members:
             players = f"{s.get('player_count',0)}/{s.get('player_limit',50)}"
             locked  = "🔒" if s.get("has_password") else ""
             kind    = s.get("kind", "official")
             type_label = "🏛 Official" if kind == "official" else "🌐 Headless"
             version    = s.get("version", "unknown") or "unknown"
             region     = s.get("region", "unknown") or "unknown"
+            scene      = _scene_label(s)
             ping_ms    = s.get("_ping_ms")
             ping_text  = self._format_ping(ping_ms)
             row_tag    = "offline_row" if ping_ms == -1 else self._ping_tag(ping_ms)
@@ -229,32 +348,40 @@ class CommunityBrowser(tk.Toplevel):
             # find its way back to the right row even after the list has
             # since been re-sorted or re-filtered by a search keystroke.
             try:
-                self.tree.insert("","end", iid=address,
-                    values=(s.get("name","?"), address, players, locked, type_label, region, version, ping_text),
+                iid = tree.insert("","end", iid=address,
+                    values=(s.get("name","?"), address, players, locked, type_label, scene, region, version, ping_text),
                     tags=row_tags)
             except tk.TclError:
                 # Two listed servers sharing the exact same address would
                 # collide on iid -- fall back to an auto-generated one
                 # rather than losing the row entirely; that server just
                 # won't get live ping updates targeted at it specifically.
-                self.tree.insert("","end",
-                    values=(s.get("name","?"), address, players, locked, type_label, region, version, ping_text),
+                iid = tree.insert("","end",
+                    values=(s.get("name","?"), address, players, locked, type_label, scene, region, version, ping_text),
                     tags=row_tags)
-
-        if not self._servers:
-            self._status.set("No servers listed yet.")
-        elif query and not visible:
-            self._status.set(f"No servers match '{query}'.")
-        else:
-            self._status.set(f"{len(visible)} of {len(self._servers)} servers shown."
-                             if query else f"{len(self._servers)} servers listed.")
+            rows[iid] = s
+        if previous is not None:  # keep the user's selection through a re-sort
+            for iid, s in rows.items():
+                if s is previous:
+                    tree.selection_set(iid)
+                    tree.see(iid)
+                    break
 
     def _selected_server(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("No selection", "Select a server first.", parent=self)
-            return None
-        return self._visible[self.tree.index(sel[0])]
+        for key, tree in self._trees.items():
+            sel = tree.selection()
+            srv = self._row_servers[key].get(sel[0]) if sel else None
+            if srv:
+                return srv
+        messagebox.showinfo("No selection", "Select a server first.", parent=self)
+        return None
+
+    def _on_tree_select(self, key):
+        if not self._trees[key].selection():
+            return
+        for other_key, tree in self._trees.items():  # one selection across all tables
+            if other_key != key and tree.selection():
+                tree.selection_remove(tree.selection())
 
     def _connect(self):
         srv = self._selected_server()

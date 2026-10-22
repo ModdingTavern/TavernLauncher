@@ -26,6 +26,7 @@ class ServerSettingsWindow(tk.Toplevel):
         self.configure(bg=BG)
         self.geometry("560x400")  # placeholder; resized to fit content below
         self.resizable(False, False)
+        _set_window_icon(self)
         self._on_save = on_save
         self._build()
         self.update_idletasks()

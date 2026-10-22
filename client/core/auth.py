@@ -30,7 +30,10 @@ def authenticate(host, username, token, password=None, timeout=8):
         return None, f"CANNOT_REACH::{e}", False
     status = resp.get("status")
     if status == "ok":
-        return resp.get("user_id"), None, bool(resp.get("quest_scene_required", False))
+        if resp.get("tutorial_scene_required"): scene_arg = "/tutorialScene"
+        elif resp.get("quest_scene_required"): scene_arg = "/questScene"
+        else: scene_arg = None
+        return resp.get("user_id"), None, scene_arg
     if status == "needs_password": return None, "NEEDS_PASSWORD", False
     if status == "wrong_password": return None, "Wrong password.", False
     if status == "not_whitelisted": return None, "NOT_WHITELISTED", False

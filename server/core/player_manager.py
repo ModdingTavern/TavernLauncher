@@ -164,6 +164,7 @@ class PlayerManagerWindow(tk.Toplevel):
         _start_hidden(prompt)
         prompt.title("Change User ID"); prompt.configure(bg=BG)
         prompt.resizable(False,False); prompt.geometry("380x230")
+        _set_window_icon(prompt)
         tk.Label(prompt, text=f"New User ID for '{uname}'",
                  bg=BG, fg=PARCH, font=("Georgia",11,"bold")).pack(pady=(16,4))
         tk.Label(prompt, text="Maps this username to a different save file.",

@@ -19,6 +19,7 @@ class ServerListPanel(tk.Toplevel):
         self.configure(bg=BG)
         self.geometry("520x460")
         self.resizable(False, False)
+        _set_window_icon(self)
         self._on_select = on_select
         self._build()
         _finish_dark_window(self)

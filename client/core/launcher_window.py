@@ -30,7 +30,7 @@ try:
 except ImportError:
     pass
 from tavern_shared.log_tailer import GameLogTailer
-from tavern_shared.mod_install import _melonloader_installed, _mods_need_attention
+from tavern_shared.mod_install import _melonloader_installed, _mods_need_attention, _tavernessentials_installed
 from tavern_shared.patch import _patch_source_path, _patch_is_applied, apply_patch
 from tavern_shared.mods_window import ModsWindow
 from tavern_shared.log_archive import archive_log_now, should_auto_archive
@@ -47,6 +47,7 @@ from client.core.auth import (
     build_tokens, _headless_user_id, register_whitelist_application, ticket_request,
 )
 from client.core.launch_hooks import run_post_auth_hooks
+from client.core.addon_hooks import build_launcher_actions, run_before_launch_hooks
 from client.core.community_browser import CommunityBrowser
 from client.core.server_list_panel import ServerListPanel
 from client.core.tickets_window import TicketsWindow
@@ -188,6 +189,8 @@ class ClientLauncher(tk.Tk):
         _btn(btn_row_dest, "🧩 TavernKeeper",     self._open_tavernkeeper,
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
 
+        build_launcher_actions(btn_row_dest, self)
+
         # ── Action area ──────────────────────────────────────────────────────
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=20, pady=6)
 
@@ -198,8 +201,8 @@ class ClientLauncher(tk.Tk):
                  justify="left", anchor="w", wraplength=480)
         self._check_label.pack(fill="x", padx=22, pady=(0,4))
 
-        # Check Server and Join Server sit side by side — checking is purely
-        # optional/informational now, never a gate on joining.
+        # Check Server, Join Server, and Menu Menu sit side by side.
+        # Checking is purely optional/informational now, never a gate on joining.
         action_row = tk.Frame(self, bg=BG)
         action_row.pack(fill="x", padx=20, pady=(0,4))
         self._check_btn = _btn(action_row, "🔍  Check Server", self._do_check,
@@ -208,6 +211,7 @@ class ClientLauncher(tk.Tk):
         self._action_btn = _btn(action_row, "⚔  Join Server", self._on_join_clicked,
                                 style="primary", font=("Georgia",12,"bold"), pady=14)
         self._action_btn.pack(side="left", fill="x", expand=True, padx=(4,0))
+        self._menu_btn = _btn(action_row, "🏠  Main Menu", self._do_launch_menu, font=("Georgia",12,"bold"), pady=14)
 
         # ── Log ───────────────────────────────────────────────────────────────
         log_header = tk.Frame(self, bg=BG)
@@ -422,6 +426,7 @@ class ClientLauncher(tk.Tk):
         self._refresh_patch_alert(exe)
 
     def _refresh_mods_alert(self):
+        self._refresh_menu_btn()
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
             self._set_mods_alert(False)
@@ -943,7 +948,7 @@ class ClientLauncher(tk.Tk):
         else:
             token, token_is_new, had_token_before = _token_state
 
-        user_id, error, quest_scene_required = authenticate(host, username, token, password=password)
+        user_id, error, scene_arg = authenticate(host, username, token, password=password)
 
         if error == "NEEDS_PASSWORD":
             self._action_btn.config(state="normal")
@@ -1033,11 +1038,11 @@ class ClientLauncher(tk.Tk):
         args += ["/dev_server_port", str(_valid_port(self.v_port.get()))]
         if self.v_debug_helper.get():
             args.append("/debug_helper")
-        if quest_scene_required:
+        if scene_arg:
             # Not a local preference the player can toggle — this server
             # told us during the auth handshake that it needs this, so the
             # client has to match, not choose for itself.
-            args.append("/questScene")
+            args.append(scene_arg)
 
         self._print(f"Launching on {platform or 'default'}…", "warn")
         try:
@@ -1045,6 +1050,7 @@ class ClientLauncher(tk.Tk):
             # by the Show MelonLoader toggle: hiding it means redirecting the
             # child's std handles at creation time (which is what makes it
             # skip AllocConsole); showing it means leaving them alone.
+            run_before_launch_hooks(host, exe, self._print)
             proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
                                     **self._popen_console_kwargs())
             self._print(f"Game running (PID {proc.pid})", "ok")
@@ -1111,6 +1117,7 @@ class ClientLauncher(tk.Tk):
 
         self._print(f"Launching on {platform or 'default'}…", "warn")
         try:
+            run_before_launch_hooks(host, exe, self._print)
             proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
                                     **self._popen_console_kwargs())
             self._print(f"Game running (PID {proc.pid})", "ok")
@@ -1118,3 +1125,68 @@ class ClientLauncher(tk.Tk):
             self._print(f"Launch failed: {e}", "err")
         self._action_btn.config(state="normal")
 
+    def _refresh_menu_btn(self):
+        """Shows Main Menu button only when TavernEssentials is installed for the selected game,
+        since that's what fills the main menu's server boards. Runs from _refresh_mods_alert,
+        so it updates on startup, when the game path changes, and after the Mods window installs
+        something or closes."""
+        exe = self.v_exe.get().strip()
+        game_dir = os.path.dirname(exe)
+        show = bool(exe) and os.path.isfile(exe) and _tavernessentials_installed(game_dir)
+        packed = self._menu_btn.winfo_manager() == "pack"
+        if show and not packed:
+            self._menu_btn.pack(side="left", fill="x", expand=True, padx=(4, 0),
+                                after=self._action_btn)
+        elif not show and packed:
+            self._menu_btn.pack_forget()
+
+    def _do_launch_menu(self):
+        """Launches the game into its main menu instead of a server.
+        Same offline identity as a headless join (see _headless_user_id),
+        just without /join_local_server, so the game falls through to the
+        main menu on startup. No server is contacted, so there is no handshake
+        and no per-server token."""
+        exe      = self.v_exe.get().strip()
+        username = self.v_username.get().strip()
+        platform = self.v_platform.get().strip()
+        platform = PLATFORM_DISPLAY_TO_BACKEND.get(platform, platform)
+
+        if not exe or not os.path.isfile(exe):
+            messagebox.showerror("Not Found",
+                "Could not find the game.\nPlease browse to 'A Township Tale.exe'.", parent=self)
+            return
+        if not username:
+            messagebox.showerror("Missing name",
+                "Please enter your name before launching the menu.", parent=self)
+            return
+        if len(username) > USERNAME_MAX_LEN:
+            messagebox.showerror("Name Too Long",
+                f"Name can be at most {USERNAME_MAX_LEN} characters.", parent=self)
+            return
+        if not _is_valid_username(username):
+            messagebox.showerror("Invalid Name",
+                "Name can only contain letters, numbers, spaces, hyphens, and underscores.", parent=self)
+            return
+
+        self._save()
+
+        user_id = _headless_user_id(username)
+        access, refresh, identity = build_tokens(user_id, username)
+        args = [exe, "/force_offline",
+                "/access_token", access, "/refresh_token", refresh,
+                "/identity_token", identity]
+
+        if platform in ("none", "fly"):
+            args.append("/fly")
+        elif platform:
+            args += ["/vrmode", platform]
+        if self.v_debug_helper.get():
+            args.append("/debug_helper")
+
+        self._print(f"Launching main menu on {platform or 'default'}...", "warn")
+        try:
+            proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
+                                    **self._popen_console_kwargs())
+            self._print(f"Menu running (PID {proc.pid})", "ok")
+        except Exception as e:
+            self._print(f"Menu launch failed: {e}", "err")

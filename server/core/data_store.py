@@ -7,11 +7,13 @@ itself -- NOT the admin-facing TicketsWindow UI, that's separate).
 import os
 import sys
 import re
+import math
 import time
 import json
 import threading
 import hashlib
 import secrets
+import shutil
 import unicodedata
 
 FAIL_LIMIT, FAIL_WINDOW = 8, 60
@@ -24,6 +26,10 @@ GAME_LOG_PATH = os.path.join(os.path.expanduser("~"), "AppData", "Roaming",
 
 PLAYERS_SAVE   = os.path.join(os.path.expanduser("~"),"AppData","Roaming",
     "A Township Tale","Servers","-1","Save","Players")
+
+# The server's whole data folder -- what the automatic backups zip up.
+SERVER_DATA_DIR = os.path.join(os.path.expanduser("~"), "AppData", "Roaming",
+    "A Township Tale", "Servers", "-1")
 
 
 USERS_FILE     = os.path.join(_tavern_data_dir(),"users.json")
@@ -133,6 +139,7 @@ def load_server_settings():
     ss["enforce_ip_limit"]  = bool(ss.get("enforce_ip_limit", True))
     ss["community_listed"]  = bool(ss.get("community_listed", False))
     ss["quest_scene"]       = bool(ss.get("quest_scene", False))
+    ss["tutorial_scene"]    = bool(ss.get("tutorial_scene", False))
 
     # Restricted to the exact set the community backend will actually
     # honor, same reasoning as VALID_REGIONS' own comment above.
@@ -166,6 +173,24 @@ def load_server_settings():
         gc_timer = 30.0
     ss["garbage_collection_timer"] = gc_timer
 
+    # Hours between automatic backups; 0 means no backups.
+    try:
+        backup_hours = float(ss.get("server_backup_time", 0))
+        if not math.isfinite(backup_hours) or backup_hours < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        backup_hours = 0.0
+    ss["server_backup_time"] = backup_hours
+
+    # How many backups to keep; 0 means keep them all.
+    try:
+        max_backups = int(ss.get("server_backup_max_backups", 0))
+        if max_backups < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        max_backups = 0
+    ss["server_backup_max_backups"] = max_backups
+
     return ss
 
 
@@ -176,6 +201,20 @@ def save_server_settings(d):
 
 _users_lock = threading.RLock()
 
+# Set when users.json exists but can't be read. Saving then would write the
+# empty fallback over every account, so _save_all_data refuses until the file
+# reads cleanly again (fix it by hand or copy users.json.bak back).
+_users_load_failed = False
+
+
+class UsersSaveError(Exception):
+    """users.json could not be saved. str() is written for the server admin."""
+
+
+class _Unsaveable(dict):
+    """Stands in for a section of users.json when the file could not be read,
+    so anything built on top of it can never be saved over the real file."""
+
 
 def _migrate_to_unified_users_file():
     """One-time merge: this launcher used to keep the player database,
@@ -184,12 +223,9 @@ def _migrate_to_unified_users_file():
     server-side mod only ever needs to parse a single file. Safe to call
     every startup: a no-op once the file is already in the new shape."""
     with _users_lock:
-        try:
-            raw = json.load(open(USERS_FILE))
-        except Exception:
-            raw = {}
-        if not isinstance(raw, dict):
-            raw = {}
+        raw, failed = _read_users_file()
+        if failed:
+            return  # unreadable: never replace it with a file rebuilt from nothing
 
         if "users" in raw and ("whitelist" in raw or "blacklist" in raw):
             return  # already unified, nothing to do
@@ -217,8 +253,8 @@ def _migrate_to_unified_users_file():
 
         merged = {"users": old_users, "whitelist": old_wl, "blacklist": old_bl}
         try:
-            json.dump(merged, open(USERS_FILE, "w"), indent=2)
-        except Exception:
+            _write_users_file(merged)
+        except UsersSaveError:
             return
 
         # The separate files are now redundant — remove them so nothing
@@ -230,17 +266,40 @@ def _migrate_to_unified_users_file():
             except Exception: pass
 
 
+def _read_users_file():
+    """(data, failed). A read that fails because another process has the file
+    open or is halfway through writing it usually works a moment later, so
+    try a few times before calling the file unreadable."""
+    for attempt in range(3):
+        try:
+            with open(USERS_FILE) as f:
+                d = json.load(f)
+        except FileNotFoundError:
+            return {}, False
+        except Exception:
+            d = None
+        if isinstance(d, dict):
+            return d, False
+        if attempt < 2:
+            time.sleep(0.04)
+    return {}, True
+
+
 def _load_all_data():
     """The whole unified file — {"users", "whitelist", "blacklist"} — with
     every section guaranteed present so callers never need to guard for a
     partially-populated or freshly-created file."""
+    global _users_load_failed
     with _users_lock:
-        try:
-            d = json.load(open(USERS_FILE))
-        except Exception:
-            d = {}
-        if not isinstance(d, dict):
-            d = {}
+        d, failed = _read_users_file()
+        _users_load_failed = failed
+        if failed:
+            # Usable-looking but unsaveable: whatever a caller builds from
+            # these can't be written over the real (unreadable) file, even if
+            # a later read happens to succeed.
+            return {"users": _Unsaveable(),
+                    "whitelist": _Unsaveable({"usernames": [], "ips": []}),
+                    "blacklist": _Unsaveable({"usernames": [], "user_ids": [], "ips": []})}
         d.setdefault("users", {})
         wl = d.setdefault("whitelist", {})
         wl.setdefault("usernames", []); wl.setdefault("ips", [])
@@ -249,10 +308,65 @@ def _load_all_data():
         return d
 
 
+def _unsaveable_message():
+    msg = ("users.json could not be read, so this change was NOT saved and "
+           "your existing accounts were left untouched.")
+    bak = USERS_FILE + ".bak"
+    try:
+        with open(bak) as f:
+            has_backup = isinstance(json.load(f), dict)
+    except Exception:
+        has_backup = False
+    if has_backup:
+        return msg + (f" The previous save is at {bak} -- if users.json is "
+                      "damaged, copy that file over it and try again.")
+    return msg + (f" Check that {USERS_FILE} is valid JSON and not open in "
+                  "another program, then try again.")
+
+
+def _replace_with_retry(src, dst, attempts=5):
+    # On Windows another program (antivirus, a mod reading the file) can hold
+    # the destination for a moment, which makes the swap fail with
+    # PermissionError; it normally clears within a fraction of a second.
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.05 * (i + 1))
+
+
+def _write_users_file(d):
+    """Atomically replaces users.json with d: write a temp file, keep the
+    previous file as users.json.bak, then swap. Raises UsersSaveError and
+    leaves users.json exactly as it was if anything goes wrong."""
+    tmp = USERS_FILE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(d, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            if os.path.isfile(USERS_FILE):
+                shutil.copyfile(USERS_FILE, USERS_FILE + ".bak")
+        except Exception:
+            pass  # the backup is a bonus; it must never block the save itself
+        _replace_with_retry(tmp, USERS_FILE)
+    except Exception as e:
+        try: os.remove(tmp)
+        except OSError: pass
+        raise UsersSaveError(f"users.json could not be written ({e}). "
+                             "Your existing accounts were left as they were.") from e
+
+
 def _save_all_data(d):
+    """Writes users.json, or raises UsersSaveError and changes nothing."""
     with _users_lock:
-        try: json.dump(d, open(USERS_FILE, "w"), indent=2)
-        except Exception: pass
+        if _users_load_failed or any(isinstance(v, _Unsaveable) for v in d.values()):
+            raise UsersSaveError(_unsaveable_message())
+        _write_users_file(d)
 
 
 def _load_users():

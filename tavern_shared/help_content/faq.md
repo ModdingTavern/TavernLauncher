@@ -18,7 +18,7 @@ Inform yourself on Discord for this method, or contact "Chaton" as he has built 
 
 ## Being sent to the main menu and not the server
 
-If you end up in the main menu at any point, something has gone wrong.
+If you end up in the main menu after clicking Join Server, something has gone wrong.
 Most often this means one of two things:
 - Your game version is the wrong one. Make sure you have the version as marked in the start of this guide, or get a fresh build from the community.
 - Your patching process has failed

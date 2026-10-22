@@ -120,6 +120,11 @@ def _set_window_icon(root):
         tmp = os.path.join(tempfile.gettempdir(), "tavern_icon.ico")
         with open(tmp, "wb") as f: f.write(base64.b64decode(_ICON_B64))
         root.iconbitmap(tmp)
+        if root.master is None:
+            # The app's own root: also make this the default for every window
+            # created later -- including stock dialogs like simpledialog, which
+            # no per-window call can reach and would otherwise show Tk's feather.
+            root.iconbitmap(default=tmp)
     except Exception: pass
 
 
