@@ -1,0 +1,32 @@
+PREFABULATOR
+
+This source integration targets Tavern Launcher 1.8.5.
+
+Enable Prefabulator in the client launcher Addons window and restart the launcher.
+Click Prefabulator on the main launcher. Enter the server address and your
+access token (owner console token or personal token). The address is remembered. Save my access token is optional and
+uses Windows account encryption; it enables auto-connect when launching that
+server through Tavern.
+
+Close the game and click Install / update player mod. A source-only installation
+downloads the pinned runtime on first use (about 144 MiB); keep internet access
+available. The full Player-Addon-and-Mod release includes everything for offline
+installation. Click Connect, wait for CONNECTED, launch the game, and press F1.
+Keep Tavern Launcher open while playing. All editing happens in game.
+
+The server owner installs the separate Server-Mod-Only release into the SERVER
+Mods folder and restarts the server. The server requires a working Tavern
+remote console. Anyone with the owner console token has full console access.
+You cannot revoke just one person's access while they still know that shared
+token. Keep it private and give other admins personal tokens instead.
+
+Source and releases: https://github.com/calebv2/ATT-Prefab-Editor
+
+Owners: connect with your owner console token and use Manage Admin Access to
+create named personal tokens, choose tabs, update permissions or revoke access.
+Give each admin their personal token; keep the owner console token private.
+Both player and server packages must be 1.0.6 or newer.
+
+In 1.0.7, linked teleporter destination chunks start loading on touch and
+the player travels after the platform animation finishes. The server owner
+must install Server-Mod-Only 1.0.7 and restart the server for this fix.
