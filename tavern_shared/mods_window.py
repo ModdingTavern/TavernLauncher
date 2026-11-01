@@ -16,7 +16,7 @@ from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set
 from tavern_shared.mod_install import (
     _detect_exe_arch, _melonloader_installed, _install_melonloader,
     _melonloader_status, _tavernlib_status, _install_tavernlib,
-    _circuitsvoicechat_status, _install_circuitsvoicechat,
+    _tavernvoice_status, _install_tavernvoice,
     _tavernessentials_status, _install_tavernessentials,
 )
 
@@ -67,9 +67,9 @@ class ModsWindow(tk.Toplevel):
             self._on_tavernlib_click)
 
         _section_label(self, "OPTIONAL MODS")
-        self._cvc_btn = self._mod_row(
-            "CircuitsVoiceChat", "Proximity voice chat for players on this server.",
-            self._on_circuitsvoicechat_click)
+        self._tv_btn = self._mod_row(
+            "TavernVoice", "Proximity voice chat for players on this server.",
+            self._on_tavernvoice_click)
         self._te_btn = self._mod_row(
             "TavernEssentials",
             "A framework to restore the original main menu functionality as well as plenty of social features and more - created by Shadow!",
@@ -113,10 +113,12 @@ class ModsWindow(tk.Toplevel):
         "missing":  ("○", MUTED, "⬇ Install"),
         "outdated": ("⚠", AMBER, "⟳ Update"),
         "unknown":  ("●", MUTED, "⟳ Reinstall"),
+        "replace":  ("⚠", AMBER, "⬇ Install"),
         "current":  ("●", GREEN, "⟳ Reinstall"),
     }
     _STATE_NOTE = {
         "missing": None,
+        "replace": "Replaces CircuitsVoiceChat, which is no longer maintained.",
         "outdated": "Update available.",
         "unknown": None,
         "current": "Up to date.",
@@ -127,15 +129,15 @@ class ModsWindow(tk.Toplevel):
         def worker():
             ml = _melonloader_status(self._game_dir)
             tl = _tavernlib_status(self._game_dir)
-            cvc = _circuitsvoicechat_status(self._game_dir)
+            tv = _tavernvoice_status(self._game_dir)
             te = _tavernessentials_status(self._game_dir)
-            self.after(0, lambda: self._apply_states(ml, tl, cvc, te, keep_status))
+            self.after(0, lambda: self._apply_states(ml, tl, tv, te, keep_status))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_states(self, ml_state, tl_state, cvc_state, te_state, keep_status=None):
+    def _apply_states(self, ml_state, tl_state, tv_state, te_state, keep_status=None):
         self._apply_row_state(self._ml_btn, ml_state)
         self._apply_row_state(self._tl_btn, tl_state)
-        self._apply_row_state(self._cvc_btn, cvc_state)
+        self._apply_row_state(self._tv_btn, tv_state)
         self._apply_row_state(self._te_btn, te_state)
         self._status.set(keep_status or "")
         self._fit_height()  # a long install error needs room to be readable
@@ -158,7 +160,7 @@ class ModsWindow(tk.Toplevel):
         state = "disabled" if busy else "normal"
         self._ml_btn.config(state=state)
         self._tl_btn.config(state=state)
-        self._cvc_btn.config(state=state)
+        self._tv_btn.config(state=state)
         self._te_btn.config(state=state)
         self._status.set(msg)
 
@@ -200,19 +202,20 @@ class ModsWindow(tk.Toplevel):
                 self.after(0, lambda: self._finish_install(False, msg))
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_circuitsvoicechat_click(self):
+    def _on_tavernvoice_click(self):
         if self._busy: return
         if not _melonloader_installed(self._game_dir):
             messagebox.showwarning("Install MelonLoader first",
-                "CircuitsVoiceChat is a MelonLoader mod — install MelonLoader above first.", parent=self)
+                "TavernVoice is a MelonLoader mod — install MelonLoader above first.", parent=self)
             return
-        self._set_busy(True, "Installing CircuitsVoiceChat…")
+        self._set_busy(True, "Installing TavernVoice…")
 
         def worker():
             try:
-                _install_circuitsvoicechat(self._game_dir,
+                result, notes = _install_tavernvoice(self._game_dir,
                     lambda m: self.after(0, lambda: self._status.set(m)))
-                self.after(0, lambda: self._finish_install(True, "CircuitsVoiceChat installed."))
+                done = " ".join(["TavernVoice is already up to date." if result == "current" else "TavernVoice installed."] + notes)
+                self.after(0, lambda: self._finish_install(True, done))
             except Exception as e:
                 msg = f"Install failed: {e}"  # e is gone by the time the callback runs
                 self.after(0, lambda: self._finish_install(False, msg))

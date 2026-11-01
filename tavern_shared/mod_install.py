@@ -1,5 +1,5 @@
 """
-Mod installation logic (MelonLoader, TavernLib, CircuitsVoiceChat, TavernEssentials)
+Mod installation logic (MelonLoader, TavernLib, TavernVoice, TavernEssentials)
 shared by both apps -- both need Install/Update buttons for the same mods,
 and this was previously duplicated near-verbatim between att_client.py
 and att_server.py. Client's copies used throughout (diff confirmed only
@@ -152,136 +152,6 @@ def _melonloader_installed(game_dir):
 
 def _tavernlib_installed(game_dir):
     return os.path.isfile(os.path.join(game_dir, "Plugins", TAVERNLIB_FILENAME))
-
-
-CIRCUITSVOICECHAT_REPO = "CircuitLord/CircuitsVoiceChat"
-
-
-CIRCUITSVOICECHAT_DESTINATIONS = {
-    "CircuitsVoiceChat.dll": "Mods",
-    "Concentus.dll": "UserLibs",
-}
-
-
-def _get_circuitsvoicechat_latest_tag():
-    """Same redirect-peek trick as MelonLoader's tag check — no GitHub API
-    call, no rate limit."""
-    loc = _get_redirect_location(f"https://github.com/{CIRCUITSVOICECHAT_REPO}/releases/latest")
-    if not loc:
-        return None
-    return loc.rstrip("/").split("/")[-1]
-
-
-def _circuitsvoicechat_manual_paths():
-    """Where a copy of both DLLs shipped with this launcher release is
-    checked for, as an automatic fallback if the GitHub download fails or
-    is taking too long — same reasoning as MelonLoader's bundled fallback."""
-    return {name: os.path.join(_app_dir(), "Patch", name)
-            for name in CIRCUITSVOICECHAT_DESTINATIONS}
-
-
-def _circuitsvoicechat_installed(game_dir):
-    return all(os.path.isfile(os.path.join(game_dir, subdir, name))
-               for name, subdir in CIRCUITSVOICECHAT_DESTINATIONS.items())
-
-
-def _circuitsvoicechat_status(game_dir):
-    """Returns 'missing', 'outdated', 'unknown', or 'current' — same state
-    machine as _melonloader_status, now that this has a real tag to check
-    against instead of just a local file."""
-    if not _circuitsvoicechat_installed(game_dir):
-        return "missing"
-    installed_tag = _load_mod_meta(game_dir).get("circuitsvoicechat_tag")
-    if not installed_tag or installed_tag.startswith("bundled:"):
-        return "unknown"
-    try:
-        latest = _get_circuitsvoicechat_latest_tag()
-    except Exception:
-        return "unknown"
-    if not latest:
-        return "unknown"
-    return "current" if latest == installed_tag else "outdated"
-
-
-def _install_circuitsvoicechat(game_dir, on_progress):
-    """Tries downloading the latest CircuitsVoiceChat release first; if
-    that fails, or a bundled copy exists in Patch/ and the download hasn't
-    finished quickly, falls back to the bundled DLLs — the exact same
-    network-first, fast-fallback pattern as _install_melonloader. Checks
-    both destination files exist in whichever source is actually used
-    before writing anything, so a partial zip or a missing bundled file
-    can't leave the mod half-installed."""
-    manual_paths = _circuitsvoicechat_manual_paths()
-    have_bundled = all(os.path.isfile(p) for p in manual_paths.values())
-
-    tag = None
-    try: tag = _get_circuitsvoicechat_latest_tag()
-    except Exception: pass
-
-    downloaded_files = None  # filename -> bytes, populated only on a real successful download
-    if tag:
-        zip_filename = f"CircuitsVoiceChat-{tag}.zip"
-        url = (f"https://github.com/{CIRCUITSVOICECHAT_REPO}/releases/latest/"
-               f"download/{urllib.parse.quote(zip_filename)}")
-        tmp_zip = os.path.join(tempfile.gettempdir(), "tavern_circuitsvoicechat_dl.zip")
-        try:
-            if have_bundled:
-                # A good fallback is right there — don't make the user
-                # wait long before using it.
-                _download_with_progress(url, tmp_zip, on_progress,
-                                         connect_timeout=8, max_total_seconds=15)
-            else:
-                _download_with_progress(url, tmp_zip, on_progress)
-            on_progress("Extracting CircuitsVoiceChat…")
-            found = {}
-            with _open_zip_with_retry(tmp_zip) as zf:
-                for wanted in CIRCUITSVOICECHAT_DESTINATIONS:
-                    match = _find_zip_entry(zf, wanted)
-                    if not match:
-                        raise RuntimeError(
-                            f"The downloaded release zip didn't contain {wanted}.")
-                    found[wanted] = zf.read(match)
-            downloaded_files = found
-        except Exception:
-            downloaded_files = None
-            if not have_bundled:
-                raise
-            on_progress("Couldn't reach GitHub — using the version bundled with this launcher…")
-        finally:
-            try: os.remove(tmp_zip)
-            except Exception: pass
-    elif not have_bundled:
-        raise RuntimeError(
-            "Couldn't reach GitHub to check for CircuitsVoiceChat, and no bundled "
-            "copy was found in Patch/ either.")
-
-    for name, subdir in CIRCUITSVOICECHAT_DESTINATIONS.items():
-        dest_dir = os.path.join(game_dir, subdir)
-        os.makedirs(dest_dir, exist_ok=True)
-        dest_path = os.path.join(dest_dir, name)
-        if downloaded_files is not None:
-            expected_hash = hashlib.sha256(downloaded_files[name]).hexdigest()
-            with open(dest_path, "wb") as f:
-                f.write(downloaded_files[name])
-        else:
-            expected_hash = _sha256_file(manual_paths[name])
-            shutil.copy2(manual_paths[name], dest_path)
-        # Controlled Folder Access can silently no-op a write; verify by reading back.
-        if not os.path.isfile(dest_path) or _sha256_file(dest_path) != expected_hash:
-            raise RuntimeError(
-                f"{name} was written without any error, but checking it afterward shows "
-                "it doesn't match what was just downloaded/copied. This usually means "
-                "something on this PC silently blocked the write — most commonly Windows' "
-                "Controlled Folder Access, or antivirus real-time protection. Try adding an "
-                "exclusion for the game's install folder in Windows Security (or your "
-                "antivirus), or temporarily disabling Controlled Folder Access, then try again.")
-
-    meta = _load_mod_meta(game_dir)
-    if downloaded_files is not None and tag:
-        meta["circuitsvoicechat_tag"] = tag
-    else:
-        meta["circuitsvoicechat_tag"] = "bundled:local"
-    _save_mod_meta(game_dir, meta)
 
 
 TAVERNESSENTIALS_REPO = "ModdingTavern/TavernEssentials"
@@ -463,6 +333,234 @@ def _install_tavernessentials(game_dir, on_progress):
     meta["tavernessentials_tag"] = tag if dll_bytes is not None else "bundled:local"
     _save_mod_meta(game_dir, meta)
     return "installed"
+
+
+TAVERNVOICE_REPO = "Nyx12012/TavernVoice"
+
+
+# Two files, the way CircuitsVoiceChat shipped: the mod, and Concentus (the
+# Opus codec) as a shared library in UserLibs that other mods can use too.
+# Concentus comes first so the mod never lands without its codec.
+TAVERNVOICE_DESTINATIONS = {
+    "Concentus.dll": "UserLibs",
+    "TavernVoice.dll": "Mods",
+}
+
+
+# CircuitsVoiceChat was the optional voice mod before TavernVoice.
+# It's no longer maintained, and running it beside TavernVoice breaks voice (both
+# capture the mic and both replace the game's voice chat), so installing
+# TavernVoice removes it. Its Concentus.dll stays: it's the build TavernVoice
+# uses, and the hash below lets TavernVoice update it later as its own.
+CVC_DLL_PREFIX = "circuitsvoicechat"
+CVC_CONCENTUS_SHA256 = "b536a1e869d447147333864451c51ceab4804957857dd97914751fba32ebe0cc"
+
+
+def _circuitsvoicechat_leftovers(game_dir):
+    """Every CircuitsVoiceChat DLL in Mods/. Older kits shipped it under a
+    versioned name (CircuitsVoiceChat-v1.0.4.dll), sometimes beside the plain one."""
+    mods_dir = os.path.join(game_dir, "Mods")
+    try:
+        names = os.listdir(mods_dir)
+    except OSError:
+        return []
+    return [os.path.join(mods_dir, n) for n in sorted(names)
+            if n.lower().startswith(CVC_DLL_PREFIX) and n.lower().endswith(".dll")]
+
+
+def _remove_circuitsvoicechat(game_dir):
+    """Deletes every CircuitsVoiceChat DLL and returns their names. A DLL the
+    running game has loaded can't be deleted on Windows, so this raises with a
+    readable message instead of leaving both voice mods in place."""
+    removed = []
+    for path in _circuitsvoicechat_leftovers(game_dir):
+        try:
+            os.remove(path)
+        except OSError as e:
+            raise RuntimeError(
+                f"Couldn't remove {os.path.basename(path)} ({e.strerror or e}). Close the game "
+                "(and the server, if this machine runs one) and try again -- TavernVoice "
+                "and CircuitsVoiceChat can't be installed side by side.")
+        removed.append(os.path.basename(path))
+    meta = _load_mod_meta(game_dir)
+    if meta.pop("circuitsvoicechat_tag", None) is not None:
+        _save_mod_meta(game_dir, meta)
+    return removed
+
+
+def _concentus_is_ours(game_dir, path):
+    """UserLibs/Concentus.dll is only overwritten if TavernVoice or CVC put it there.
+    Any other copy belongs to some other mod, which may need its own version, so it's left alone."""
+    try:
+        digest = _sha256_file(path)
+    except OSError:
+        return False
+    return digest in (CVC_CONCENTUS_SHA256, _load_mod_meta(game_dir).get("tavernvoice_concentus_sha256"))
+
+
+def _get_tavernvoice_latest_tag():
+    loc = _get_redirect_location(f"https://github.com/{TAVERNVOICE_REPO}/releases/latest")
+    if not loc:
+        return None
+    return loc.rstrip("/").split("/")[-1]
+
+
+def _tavernvoice_bundled_paths():
+    """The copies shipped in Patch/ as {file name: path}: the mod plain or
+    versioned (TavernVoice-v2.0.0.dll), Concentus.dll as is. None unless both are there."""
+    patch_dir = os.path.join(_app_dir(), "Patch")
+    mod = os.path.join(patch_dir, "TavernVoice.dll")
+    if not os.path.isfile(mod):
+        mod = None
+        try:
+            for name in sorted(os.listdir(patch_dir)):
+                low = name.lower()
+                if low.startswith("tavernvoice") and low.endswith(".dll"):
+                    mod = os.path.join(patch_dir, name)
+                    break
+        except OSError:
+            pass
+    concentus = os.path.join(patch_dir, "Concentus.dll")
+    if mod and os.path.isfile(concentus):
+        return {"TavernVoice.dll": mod, "Concentus.dll": concentus}
+    return None
+
+
+def _tavernvoice_installed(game_dir):
+    return all(os.path.isfile(os.path.join(game_dir, subdir, name))
+               for name, subdir in TAVERNVOICE_DESTINATIONS.items())
+
+
+def _tavernvoice_status(game_dir):
+    """'missing', 'replace', 'outdated', 'unknown' or 'current'. 'replace'
+    means CircuitsVoiceChat is still installed: the row offers the switch and
+    the Mods button flashes until it's made. A TavernVoice.dll without
+    Concentus beside it, or one the launcher has no record of installing,
+    reads 'outdated' -- that's usually TavernVoice 1.x, copied in by hand,
+    which talks to a relay that no longer exists."""
+    if _circuitsvoicechat_leftovers(game_dir):
+        return "replace"
+    if not os.path.isfile(os.path.join(game_dir, TAVERNVOICE_DESTINATIONS["TavernVoice.dll"], "TavernVoice.dll")):
+        return "missing"
+    if not _tavernvoice_installed(game_dir):
+        return "outdated"
+    installed_tag = _load_mod_meta(game_dir).get("tavernvoice_tag")
+    if not installed_tag:
+        return "outdated"
+    if installed_tag.startswith("bundled:"):
+        return "unknown"
+    try:
+        latest = _get_tavernvoice_latest_tag()
+    except Exception:
+        return "unknown"
+    if not latest:
+        return "unknown"
+    return "current" if latest == installed_tag else "outdated"
+
+
+def _fetch_tavernvoice_files(url, on_progress, have_bundled):
+    """Downloads one release zip and returns {file name: bytes} for both files."""
+    tmp_zip = os.path.join(tempfile.gettempdir(), "tavern_tavernvoice_dl.zip")
+    try:
+        if have_bundled:
+            _download_with_progress(url, tmp_zip, on_progress, connect_timeout=8, max_total_seconds=15)
+        else:
+            _download_with_progress(url, tmp_zip, on_progress)
+        on_progress("Extracting TavernVoice...")
+        found = {}
+        with _open_zip_with_retry(tmp_zip) as zf:
+            for wanted in TAVERNVOICE_DESTINATIONS:
+                match = _find_zip_entry(zf, wanted)
+                if not match:
+                    raise RuntimeError(f"The downloaded release zip didn't contain {wanted}.")
+                found[wanted] = zf.read(match)
+        return found
+    finally:
+        try: os.remove(tmp_zip)
+        except Exception: pass
+
+
+def _install_tavernvoice(game_dir, on_progress):
+    """Same flow as TavernEssentials: the latest GitHub release, else the
+    copies in Patch/. CircuitsVoiceChat is removed once both files are in hand
+    and before either is written, so a failed download leaves the old voice
+    mod working and a locked CVC DLL stops the install before anything
+    changes. Returns (result, notes): result is 'current' if what's on GitHub matches
+    what's installed, else 'installed'; notes are short sentences for the status line
+    (CVC files removed, a foreign Concentus kept)."""
+    bundled = _tavernvoice_bundled_paths()
+
+    tag = None
+    try: tag = _get_tavernvoice_latest_tag()
+    except Exception: pass
+
+    files, last_error = None, None
+    if tag:
+        started = time.time()
+        prefer = "tavernvoice"
+        for url in _release_zip_urls(TAVERNVOICE_REPO, tag, prefer):
+            try:
+                files = _fetch_tavernvoice_files(url, on_progress, bool(bundled))
+                break
+            except Exception as e:
+                last_error = e
+                if bundled and time.time() - started > 10:
+                    break
+    from_github = files is not None
+
+    if not from_github:
+        if not bundled:
+            detail = f"\n\n{last_error}" if last_error else ""
+            raise RuntimeError("Couldn't get TavernVoice from GitHub, and no bundled "
+                               "copy was found in Patch/ either." + detail)
+        on_progress("Couldn't reach GitHub - using the version bundled with this launcher...")
+        files = {}
+        for name, path in bundled.items():
+            with open(path, "rb") as f:
+                files[name] = f.read()
+
+    notes = []
+    removed = _remove_circuitsvoicechat(game_dir)
+    if removed:
+        notes.append("Removed CircuitsVoiceChat (" + ", ".join(removed) + ").")
+
+    changed, concentus_ours = False, False
+    for name, subdir in TAVERNVOICE_DESTINATIONS.items():
+        dest_dir = os.path.join(game_dir, subdir)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest_path = os.path.join(dest_dir, name)
+        expected_hash = hashlib.sha256(files[name]).hexdigest()
+        if os.path.isfile(dest_path):
+            try:
+                same= _sha256_file(dest_path) == expected_hash
+            except Exception:
+                same = False
+            if same:
+                concentus_ours = concentus_ours or name == "Concentus.dll"
+                continue
+            if name == "Concentus.dll" and not _concentus_is_ours(game_dir, dest_path):
+                notes.append("Kept the Concentus.dll already in UserLibs, another mod put it there.")
+                continue
+        with open(dest_path, "wb") as f:
+            f.write(files[name])
+        # Controlled Folder Access can silently no-op a write; verify by reading back.
+        if not os.path.isfile(dest_path) or _sha256_file(dest_path) != expected_hash:
+            raise RuntimeError(
+                f"{name} was written without any error, but checking it afterward "
+                "shows it doesn't match what was just downloaded/copied. This usually means "
+                "something on this PC silently blocked the write - most commonly Windows' "
+                "Controlled Folder Access, or antivirus real-time protection. Try adding an "
+                "exclusion for the game's install folder in Windows Security (or your "
+                "antivirus), or temporarily disabling Controlled Folder Access, then try again.")
+        changed = True
+        concentus_ours = concentus_ours or name == "Concentus.dll"
+
+    meta = _load_mod_meta(game_dir)
+    meta["tavernvoice_tag"] = tag if from_github else "bundled:local"
+    if concentus_ours:
+        meta["tavernvoice_concentus_sha256"] = hashlib.sha256(files["Concentus.dll"]).hexdigest()
+    _save_mod_meta(game_dir, meta)
+    return ("current" if from_github and not changed else "installed"), notes
 
 
 @contextlib.contextmanager
@@ -785,7 +883,7 @@ def _tavernlib_status(game_dir):
 
 def _mods_need_attention(game_dir):
     """True if either required mod is missing/outdated, or an optional mod
-    (CircuitsVoiceChat, TavernEssentials) is outdated — the trigger for flashing the main
+    (TavernVoice, TavernEssentials) is outdated — the trigger for flashing the main
     window's Mods button. Deliberately not "missing" for the optional mod:
     not having opted into it is a normal, expected state, not something
     that needs attention. Network failures during the update checks never
@@ -793,6 +891,6 @@ def _mods_need_attention(game_dir):
     purely local, always-reliable check) does that unconditionally."""
     return (_melonloader_status(game_dir) in ("missing", "outdated") or
             _tavernlib_status(game_dir)   in ("missing", "outdated") or
-            _circuitsvoicechat_status(game_dir) == "outdated" or
+            _tavernvoice_status(game_dir) in ("outdated", "replace") or
             _tavernessentials_status(game_dir) == "outdated")
 

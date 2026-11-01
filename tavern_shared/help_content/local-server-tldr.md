@@ -33,7 +33,7 @@ Second, click "Mods". <br>
 Click "Install" on each of the following in order: <br>
 - MelonLoader <br>
 - TavernLib <br>
-- CircuitsVoiceChat
+- TavernVoice
 
 ## Essentials
 

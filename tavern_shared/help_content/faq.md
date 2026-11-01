@@ -40,11 +40,12 @@ If your machine did this, it's a good idea to manually do the below:
 - Place this .zip file in this directory: `C:\Games\Alta\A Township Tale` and extract it
 - You should now have a "MelonLoader" folder inside the same folder as your "A Township Tale.exe" executable
 - Grab the `Concentus.dll` file from the "Patch" folder and place it here: `C:\Games\Alta\A Township Tale\UserLibs`
-- Grab the `CircuitsVoiceChat-v1.0.8.dll` from the "Patch" folder place it here: `C:\Games\Alta\A Township Tale\Mods`
+- Grab the `TavernVoice.dll` file from the "Patch" folder and place it here: `C:\Games\Alta\A Township Tale\Mods`
+- If `Mods` has any `CircuitsVoiceChat` DLL in it, delete it. TavernVoice replaces it and the two can't run together.
 
 Congratulations, you've now manually done what the "Patch" and "Mods" button tried to do for you!
 
-## Installing MelonLoader/TavernLib/CircuitsVoiceChat takes x time, is this normal?
+## Installing MelonLoader/TavernLib/TavernVoice takes x time, is this normal?
 
 If this takes longer than a minute something has probably gone wrong.
 Some Windows installations decide to be tough on trying to fetch files from the internet.

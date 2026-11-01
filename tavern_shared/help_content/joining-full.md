@@ -63,7 +63,7 @@ Click "Install" on each of the following in order:
 
 - **MelonLoader** — This is the modding platform that will inject all the mods into your game, this is the base requirement for all changes. This is a 3rd party application not managed by us.
 - **TavernLib** — This is the driving power behind The Modding Tavern and contains the needed bridges to restore private servers.
-- **CircuitsVoiceChat** — An optional but highly recommended mod that will allow voice chat inside the game, since the official service was retired.
+- **TavernVoice** - An optional but highly recommended mod that will allow proximity voice chat inside the game, since the official service was retired. It replaces CircuitsVoiceChat, which is no longer maintained, and removes it when installed. (Credits to [CircuitLord](https://github.com/CircuitLord))
 
 That's it. If the buttons have stopped flashing you should be on the latest versions of everything that's needed.
 

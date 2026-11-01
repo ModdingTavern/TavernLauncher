@@ -33,7 +33,7 @@ Second, click "Mods". <br>
 Click "Install" on each of the following in order: <br>
 - MelonLoader <br>
 - TavernLib <br>
-- CircuitsVoiceChat
+- TavernVoice
 
 ## Essentials
 
@@ -105,11 +105,13 @@ Configure your internet router port forwarding: <br>
 Forward to your copied private IP.
 
 Please note that this is a port RANGE! It means port 1757, 1758, 1759, 1760, 1761 AND 1762, not only 1757 + 1762.
-While 1758, 1759 and 1760 aren't used, it's easier to just forward that range to keep it tidier on your router.
+While 1758 and 1760 aren't used, it's easier to just forward that range to keep it tidier on your router.
 If you care about having reduced exposure, make three separate rules: <br>
 - `UDP 1757` <br>
 - `TCP 1761` <br>
 - `TCP 1762`
+
+TavernVoice uses `UDP 1759` from that range. With separate rules, add one for it.
 
 ### Firewall Settings
 

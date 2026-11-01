@@ -64,7 +64,7 @@ Click "Install" on each of the following in order: <br>
 
 - **MelonLoader** — This is the modding platform that will inject all the mods into your game, this is the base requirement for all changes. This is a 3rd party application not managed by us.
 - **TavernLib** — This is the driving power behind The Modding Tavern and contains the needed bridges to restore private servers.
-- **CircuitsVoiceChat** — An optional but highly recommended mod that will allow voice chat inside the game, since the official service was retired.
+- **TavernVoice** - An optional but highly recommended mod that will allow proximity voice chat inside the game, since the official service was retired. It replaces CircuitsVoiceChat, which is no longer maintained, and removes it when installed. (Credits to [CircuitLord](https://github.com/CircuitLord))
 
 That's it. If the buttons have stopped flashing you should be on the latest versions of everything that's needed.
 
@@ -151,17 +151,21 @@ Configure your internet router to port forward following ports: <br>
 And forward it to the IP you copied above.
 
 Please note that this is a port RANGE! It means port 1757, 1758, 1759, 1760, 1761 AND 1762, not only 1757 + 1762.
-While 1758, 1759 and 1760 aren't used, it's easier to just forward that range to keep it tidier on your router.
+While 1758 and 1760 aren't used, it's easier to just forward that range to keep it tidier on your router.
 If you care about having reduced exposure, make three separate rules: <br>
 - `UDP 1757` <br>
 - `TCP 1761` <br>
 - `TCP 1762`
+
+If the server runs TavernVoice, its voice relay uses `UDP 1759` from that range. With separate rules, add one for it.
+Without it voice still works, but it goes through the game connection and stutters whenever the server does.
 
 ### Firewall Settings
 
 Make sure you have two inbound firewall rules configured for this traffic: <br>
 - `TCP 1761 + TCP 1762` <br>
 - `UDP 1757` <br>
+- `UDP 1759` if you run TavernVoice (or click "Allow" when Windows asks about TavernVoiceRelay.exe) <br>
 
 ## Conclusion
 
