@@ -1,8 +1,9 @@
 PREFABULATOR - TAVERN LAUNCHER 1.8.5 ADD-ON
 
 Enable Prefabulator in the client launcher Addons window and restart the launcher.
-Open Prefabulator on the main launcher. Enter the server address and owner console
-token, or paste your personal moderator code. The address is remembered. Saving
+Choose your server in the CLIENT launcher, then open Prefabulator. It uses that
+address automatically. Enter the owner console token, or paste your personal
+moderator code. A code also selects its server in the launcher. Saving
 access is optional and encrypted for your Windows account; it enables auto-connect
 when launching that server. All editing happens IN GAME with F1.
 
@@ -16,13 +17,15 @@ CHOOSE YOUR INSTALLATION
   For a fresh shared setup, first copy Mods from the All-in-One-Shared-Mods ZIP
   into the shared game folder so the server can start with its core installed.
 
-A source-only add-on downloads the pinned 1.0.15 runtime on first use and verifies
+A source-only add-on downloads the pinned 1.0.17 runtime on first use and verifies
 SHA-256. The player download is about 144 MiB; all-in-one is about 205 MiB. Downloads
 extract runtime/payload files only. The full release ZIPs support offline setup.
 
 Start the server, connect Prefabulator, wait for CONNECTED, then launch/join the
 player game and press F1. Keep Tavern Launcher and Prefabulator open; minimize them
-if needed. After changing connections or updating, restart the player game.
+if needed. If you change servers, click Change server / reconnect before joining.
+The window shows both addresses if they differ. Blank means this computer
+(127.0.0.1). After changing connections or updating, restart the player game.
 
 UPDATING
 Separate setup: stop the player game to update player files; stop the server to
@@ -38,9 +41,9 @@ Anyone holding the owner console token has full console access; one holder canno
 be revoked individually while they still know that shared token. Keep it private.
 
 Release/download choices:
-https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.15
+https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.17
 Mod source:
-https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.15
+https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.17
 
 CONNECTION TROUBLE
 Use the same server address in Prefabulator and Join Server. A changed address

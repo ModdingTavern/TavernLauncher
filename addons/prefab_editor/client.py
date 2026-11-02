@@ -31,6 +31,7 @@ def build(parent, window):
     tk.Label(parent, text='Prefabulator', bg=BG, fg=PARCH, font=('Segoe UI', 14, 'bold')).pack(anchor='w', padx=12, pady=12)
     tk.Label(parent, text='Prefabulator connects your in-game editor. All editing happens in the game.\nChoose the game folder below. Tick the shared-folder option ONLY if the server and player use that same game folder.\nClose the game before installing; for a shared folder stop BOTH server and game.\nThen reconnect, launch/join normally and press F1. Keep Prefabulator open.',
              bg=BG, fg=MUTED, justify='left', wraplength=680).pack(anchor='w', padx=12)
+    tk.Label(parent, textvariable=window._server_status, bg=BG, fg=PARCH, justify='left', wraplength=680).pack(anchor='w', padx=12, pady=8)
     tk.Entry(parent, textvariable=game, width=80).pack(fill='x', padx=12, pady=8)
     _btn(parent, 'Choose game folder', lambda: choose(), 'primary').pack(anchor='w', padx=12)
     tk.Label(parent, textvariable=status, bg=BG, fg=PARCH, justify='left', wraplength=680).pack(anchor='w', padx=12, pady=12)
@@ -133,6 +134,8 @@ def build(parent, window):
     install_button.pack(anchor='w', padx=12, pady=6)
     shared.trace_add('write', update_install_label)
     update_install_label()
+    if window._launcher is not None:
+        _btn(parent, 'Change server / reconnect', window._reopen_connection, 'primary').pack(anchor='w', padx=12, pady=6)
     _btn(parent, 'Retry editor connection', start_editor, 'primary').pack(anchor='w', padx=12, pady=6)
     _btn(parent, 'Disconnect editor', stop_editor).pack(anchor='w', padx=12, pady=6)
     def forget_token():
@@ -193,28 +196,92 @@ def build(parent, window):
 
 class PrefabulatorWindow(TavernKeeperWindow):
     """Reuse only Tavern's connection form/auth; never build its editing tabs."""
+    def __init__(self, parent):
+        self._launcher = parent if hasattr(parent, 'v_ip') else None
+        self._launcher_trace = None
+        self._server_status = tk.StringVar(master=parent, value='')
+        super().__init__(parent)
+        if self._launcher is not None:
+            self._launcher_trace = self._launcher.v_ip.trace_add('write', self._launcher_changed)
+            self.bind('<Destroy>', self._remove_launcher_trace, add='+')
+
+    def _launcher_host(self):
+        if self._launcher is not None:
+            return self._launcher.v_ip.get().strip() or '127.0.0.1'
+        return None
+
+    def _update_server_status(self):
+        host = self.v_host.get().strip() or '127.0.0.1'
+        selected = self._launcher_host()
+        if self._connected and selected and not _same_server(host, selected):
+            self._server_status.set('Connected server: ' + host + '\nLauncher selected: ' + selected +
+                                    '\nServer changed. Click Change server / reconnect before joining.')
+        elif self._connected:
+            self._server_status.set('Connected server: ' + host + '\nReady to join this server from Tavern Launcher.')
+        elif selected:
+            self._server_status.set('Using the server selected in Tavern Launcher: ' + selected +
+                                    '\nChange it in the main launcher. A blank address means this computer (127.0.0.1).')
+        else:
+            self._server_status.set('Use the same server address here and in the game launcher.')
+
+    def _launcher_changed(self, *_):
+        host = self._launcher_host()
+        if not self._connected and host != self.v_host.get():
+            self.v_host.set(host)  # Clears the previous server's credential.
+        self._update_server_status()
+
+    def _remove_launcher_trace(self, event):
+        if event.widget is self and self._launcher_trace is not None:
+            self._launcher.v_ip.trace_remove('write', self._launcher_trace)
+            self._launcher_trace = None
+
+    def _reopen_connection(self):
+        if self._launcher is None or getattr(self, '_reconnecting', False):
+            return
+        self._reconnecting = True
+        def reopen():
+            if self.winfo_exists():
+                self._on_close()
+                open_prefabulator(self._launcher)
+        def stop():
+            with _session_lock:
+                if _active and _active.transport.client is self._ws_client:
+                    _active.close()
+            self.after(0, reopen)
+        threading.Thread(target=stop, daemon=True).start()
+
     def _build_connect_form(self):
         super()._build_connect_form()
         self.title('Prefabulator')
         def relabel(widget):
             if isinstance(widget, tk.Label) and 'TavernKeeper' in str(widget.cget('text')):
                 widget.configure(text='Prefabulator')
+            if isinstance(widget, tk.Label) and str(widget.cget('text')) == 'SERVER IP' and self._launcher is not None:
+                widget.configure(text='SERVER SELECTED IN TAVERN LAUNCHER')
+            if isinstance(widget, tk.Label) and str(widget.cget('text')).startswith("Connects to a server's console"):
+                widget.configure(text='Choose your server in the main launcher, then connect here with your personal moderator code or owner console token.')
+            if isinstance(widget, tk.Entry) and str(widget.cget('textvariable')) == str(self.v_host) and self._launcher is not None:
+                widget.configure(state='readonly', readonlybackground=BG, fg=PARCH)
             if isinstance(widget, tk.Label) and str(widget.cget('text')) == 'CONSOLE TOKEN':
                 widget.configure(text='MODERATOR CODE or owner console token')
             for child in widget.winfo_children():
                 relabel(child)
         relabel(self)
         saved = _preferences.read()
-        self.v_host.set(saved.get('host', ''))
+        host = self._launcher_host() or saved.get('host', '')
+        self.v_host.set(host)
+        same_saved_server = _same_server(saved.get('host', ''), host)
         self.v_remember = tk.BooleanVar(value=bool(saved.get('protectedToken')))
         try:
-            self.v_token.set(_preferences.token(saved))
+            self.v_token.set(_preferences.token(saved) if same_saved_server else '')
         except Exception:
             self._connect_status.set('Saved token unavailable. Enter it again.')
+        tk.Label(self, textvariable=self._server_status, bg=BG, fg=PARCH, wraplength=420, justify='left').pack(fill='x', padx=20, pady=8)
+        self._update_server_status()
         tk.Checkbutton(self, text='Save my access token and auto-connect when I launch this server',
                        variable=self.v_remember, command=self._remember_changed,
                        bg=BG, fg=PARCH, selectcolor=BG, wraplength=390).pack(fill='x', padx=20)
-        tk.Label(self, text='Moderator: paste the code from your owner and click Connect; it fills in the server address.\nSaved tokens are encrypted for this Windows account.',
+        tk.Label(self, text='Moderator: paste your code and click Connect. Its server will also be selected in the main launcher.\nSaved tokens are encrypted for this Windows account.',
                  bg=BG, fg=MUTED, wraplength=390, justify='left').pack(padx=20, pady=8)
         self.v_host.trace_add('write', self._host_changed)
         self.update_idletasks()
@@ -224,6 +291,7 @@ class PrefabulatorWindow(TavernKeeperWindow):
         # Never carry a saved credential over to a different address.
         self.v_token.set('')
         self._remember_changed()
+        self._update_server_status()
 
     def _remember_changed(self):
         try:
@@ -242,6 +310,8 @@ class PrefabulatorWindow(TavernKeeperWindow):
             except ValueError as error:
                 self._connect_status.set(str(error))
                 return
+            if self._launcher is not None:
+                self._launcher.v_ip.set(host)  # A code selects its own server; never send it to another one.
             self.v_host.set(host)  # Changing the address clears the old token.
             self.v_token.set(token)
         self._remember_changed()
@@ -252,6 +322,7 @@ class PrefabulatorWindow(TavernKeeperWindow):
             child.destroy()
         self.geometry('720x620')
         self.minsize(600, 500)
+        self._update_server_status()
         build(self, self)
 
     def _on_line(self, text):
@@ -288,7 +359,8 @@ def _auto_connect(host, game_exe, log_fn):
     with _session_lock:
         if _active and not _active.closed:
             if not _same_server(getattr(_active, 'host', ''), host):
-                _active.close_reason = 'Editor disconnected: the game launcher and Prefabulator use different server addresses. Use the same address in both, then click Retry editor connection.'
+                _active.close_reason = ('Editor disconnected: Prefabulator is connected to ' + getattr(_active, 'host', '') +
+                                        ', but the launcher selected ' + host + '. Open Prefabulator and click Change server / reconnect before joining.')
                 log_fn(_active.close_reason)
                 _active.close()
             elif _active.transport.client._connected and _active.process and _active.process.poll() is None:
