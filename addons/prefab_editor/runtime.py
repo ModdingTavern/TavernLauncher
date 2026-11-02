@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import threading
 import time
-import uuid
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent
@@ -237,7 +236,7 @@ class Bridge:
                 if self.closed:
                     raise RuntimeError('Editor startup canceled')
                 self.written = json.dumps({'panelUrl': self.url, 'managedBy': 'TavernLauncher',
-                                           'sessionId': uuid.uuid4().hex}).encode()
+                                           'sessionId': os.urandom(16).hex()}).encode()
                 self.ensure_connection()
             return self.url
         except Exception:
@@ -259,7 +258,7 @@ class Bridge:
             previous = owned[0] if owned is not None else current
             if current != self.written:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                temp = target.with_name(target.name + '.' + uuid.uuid4().hex + '.tmp')
+                temp = target.with_name(target.name + '.' + os.urandom(16).hex() + '.tmp')
                 try:
                     temp.write_bytes(self.written)
                     os.replace(temp, target)

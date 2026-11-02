@@ -47,3 +47,7 @@ Use the same server address in Prefabulator and Join Server. A changed address
 now explains why the editor disconnected. Retry editor connection repairs a
 missing descriptor for a live helper. The connected view displays its file path
 and local URL. After connecting, restart the player game if already open.
+
+MISSING BUTTON: Version 1.0.16 removes a uuid import unavailable in the shipped
+client launcher. Close the client launcher, replace this add-on folder and
+reopen it. No game DLL update, Python installation or server restart is needed.
