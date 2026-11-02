@@ -65,8 +65,10 @@ class Settings:
         temp.write_text(json.dumps(choices), encoding='utf-8')
         os.replace(temp, target)
 
-    def save(self, host, token="", remember=False):
+    def save(self, host, token="", remember=False, game_host=None):
         data = {"host": host.strip() or "127.0.0.1"}
+        if game_host:
+            data["gameHost"] = game_host.strip() or "127.0.0.1"
         if remember and token:
             data["protectedToken"] = protect(token)
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -95,11 +95,12 @@ def build(parent, window):
             return
         connection_host = window.v_host.get().strip() or '127.0.0.1'
         connection_token = window.v_token.get().strip()
+        game_host = window._game_host or connection_host
         def connect_editor():
             global _active
             with _session_lock:
                 if _active and not _active.closed:
-                    if not _same_server(getattr(_active, 'host', ''), connection_host):
+                    if not _same_server(getattr(_active, 'host', ''), connection_host) or not _same_server(getattr(_active, 'game_host', _active.host), game_host):
                         raise RuntimeError('Disconnect the existing editor before changing servers.')
                     _active.ensure_connection(path)
                     tracked_bridge[0] = _active
@@ -109,6 +110,7 @@ def build(parent, window):
                                 host=connection_host, token=connection_token,
                                 access_transport=management_transport)
                 bridge.host = connection_host
+                bridge.game_host = game_host
                 _active = bridge
                 tracked_bridge[0] = bridge
                 try:
@@ -140,7 +142,7 @@ def build(parent, window):
     _btn(parent, 'Disconnect editor', stop_editor).pack(anchor='w', padx=12, pady=6)
     def forget_token():
         try:
-            _preferences.save(_preferences.read().get('host', ''))
+            _preferences.save(_preferences.read().get('host', ''), game_host=_preferences.read().get('gameHost'))
             status.set('Saved token removed. Enter it in Prefabulator next session. Your address is still saved.')
         except OSError:
             status.set('Could not remove saved token. Check your user settings folder permissions.')
@@ -150,7 +152,7 @@ def build(parent, window):
     management_transport = (None if window.v_token.get().strip().startswith('pfa1.')
                             else SessionTransport(window._ws_client))
     owner_button = _btn(parent, 'Manage Admin Access (owner)', lambda: AccessWindow(
-        window, management_transport, window.v_host.get().strip() or '127.0.0.1'))
+        window, management_transport, window._game_host or window.v_host.get().strip() or '127.0.0.1'))
     def check_owner():
         if management_transport is None:
             return
@@ -199,6 +201,8 @@ class PrefabulatorWindow(TavernKeeperWindow):
     def __init__(self, parent):
         self._launcher = parent if hasattr(parent, 'v_ip') else None
         self._launcher_trace = None
+        self._game_host = None
+        self._connecting_route = None
         self._server_status = tk.StringVar(master=parent, value='')
         super().__init__(parent)
         if self._launcher is not None:
@@ -213,21 +217,31 @@ class PrefabulatorWindow(TavernKeeperWindow):
     def _update_server_status(self):
         host = self.v_host.get().strip() or '127.0.0.1'
         selected = self._launcher_host()
-        if self._connected and selected and not _same_server(host, selected):
-            self._server_status.set('Connected server: ' + host + '\nLauncher selected: ' + selected +
+        game_host = self._game_host or host
+        if self._connected and selected and not _same_server(game_host, selected):
+            self._server_status.set('Connected game server: ' + game_host + '\nLauncher selected: ' + selected +
                                     '\nServer changed. Click Change server / reconnect before joining.')
         elif self._connected:
-            self._server_status.set('Connected server: ' + host + '\nReady to join this server from Tavern Launcher.')
+            self._server_status.set('Game server: ' + game_host + '\nConsole connection: ' + host + '\nReady to join this server from Tavern Launcher.')
         elif selected:
-            self._server_status.set('Using the server selected in Tavern Launcher: ' + selected +
-                                    '\nChange it in the main launcher. A blank address means this computer (127.0.0.1).')
+            self._server_status.set('Game server selected in Tavern Launcher: ' + selected + '\nConsole connection: ' + host)
         else:
-            self._server_status.set('Use the same server address here and in the game launcher.')
+            self._server_status.set('Select your game server, then connect to its console.')
 
     def _launcher_changed(self, *_):
         host = self._launcher_host()
-        if not self._connected and host != self.v_host.get():
-            self.v_host.set(host)  # Clears the previous server's credential.
+        if not self._connected and not self._connecting_route and not _same_server(self._game_host or '', host):
+            self._game_host = host
+            self.v_local_console.set(False)
+            self.v_host.set(host)  # A different game server never inherits a local-console pairing or credential.
+        self._update_server_status()
+
+    def _local_console_changed(self):
+        if self._connecting_route:
+            self.v_local_console.set(self._connecting_route[3])
+            return
+        self._game_host = self._launcher_host() or self._game_host or '127.0.0.1'
+        self.v_host.set('127.0.0.1' if self.v_local_console.get() else self._game_host)
         self._update_server_status()
 
     def _remove_launcher_trace(self, event):
@@ -257,9 +271,9 @@ class PrefabulatorWindow(TavernKeeperWindow):
             if isinstance(widget, tk.Label) and 'TavernKeeper' in str(widget.cget('text')):
                 widget.configure(text='Prefabulator')
             if isinstance(widget, tk.Label) and str(widget.cget('text')) == 'SERVER IP' and self._launcher is not None:
-                widget.configure(text='SERVER SELECTED IN TAVERN LAUNCHER')
+                widget.configure(text='CONSOLE ADDRESS (set by the option below)')
             if isinstance(widget, tk.Label) and str(widget.cget('text')).startswith("Connects to a server's console"):
-                widget.configure(text='Choose your server in the main launcher, then connect here with your personal moderator code or owner console token.')
+                widget.configure(text='Choose your game server in the main launcher. If you also host it on this computer, tick the local console option below before entering your token.')
             if isinstance(widget, tk.Entry) and str(widget.cget('textvariable')) == str(self.v_host) and self._launcher is not None:
                 widget.configure(state='readonly', readonlybackground=BG, fg=PARCH)
             if isinstance(widget, tk.Label) and str(widget.cget('text')) == 'CONSOLE TOKEN':
@@ -268,9 +282,18 @@ class PrefabulatorWindow(TavernKeeperWindow):
                 relabel(child)
         relabel(self)
         saved = _preferences.read()
-        host = self._launcher_host() or saved.get('host', '')
+        selected = self._launcher_host() or saved.get('gameHost') or saved.get('host', '')
+        self._game_host = selected or '127.0.0.1'
+        same_saved_game = _same_server(saved.get('gameHost', saved.get('host', '')), self._game_host)
+        use_local = same_saved_game and saved.get('gameHost') and saved.get('host') == '127.0.0.1'
+        self.v_local_console = tk.BooleanVar(value=bool(use_local))
+        host = '127.0.0.1' if use_local else selected
         self.v_host.set(host)
-        same_saved_server = _same_server(saved.get('host', ''), host)
+        same_saved_server = same_saved_game and _same_server(saved.get('host', ''), host)
+        if self._launcher is not None:
+            tk.Checkbutton(self, text='I run this server on THIS computer - connect its console through localhost',
+                           variable=self.v_local_console, command=self._local_console_changed,
+                           bg=BG, fg=PARCH, selectcolor=BG, wraplength=420).pack(fill='x', padx=20, pady=8)
         self.v_remember = tk.BooleanVar(value=bool(saved.get('protectedToken')))
         try:
             self.v_token.set(_preferences.token(saved) if same_saved_server else '')
@@ -296,9 +319,11 @@ class PrefabulatorWindow(TavernKeeperWindow):
     def _remember_changed(self):
         try:
             host, token = self.v_host.get(), self.v_token.get().strip()
+            game_host = self._game_host if self.v_local_console.get() else None
             if token.startswith(PREFIX):
                 host, token = read_code(token)
-            _preferences.save(host, token, self.v_remember.get())
+                game_host = None  # Invitation credentials belong only to their embedded server.
+            _preferences.save(host, token, self.v_remember.get(), game_host=game_host)
         except Exception:
             self._connect_status.set('Could not save preferences. You can connect with saving unchecked.')
 
@@ -310,14 +335,33 @@ class PrefabulatorWindow(TavernKeeperWindow):
             except ValueError as error:
                 self._connect_status.set(str(error))
                 return
+            self.v_local_console.set(False)  # A code chooses its own console; never silently redirect it to localhost.
+            self._game_host = host
             if self._launcher is not None:
                 self._launcher.v_ip.set(host)  # A code selects its own server; never send it to another one.
             self.v_host.set(host)  # Changing the address clears the old token.
             self.v_token.set(token)
+        self._game_host = self._launcher_host() or self._game_host or self.v_host.get()
         self._remember_changed()
+        if not self.v_token.get().strip():
+            self._connect_status.set('Enter your moderator code or owner console token.')
+            return
+        self._connecting_route = (self._game_host, self.v_host.get().strip() or '127.0.0.1', self.v_token.get().strip(), self.v_local_console.get())
         super()._attempt_connect()
 
+    def _connect_failed(self, message):
+        self._connecting_route = None
+        super()._connect_failed(message)
+        self._launcher_changed()
+
     def _connect_succeeded(self):
+        if self._connecting_route:
+            self._game_host, host, token, local = self._connecting_route
+            self._connecting_route = None
+            self.v_local_console.set(local)
+            self.v_host.set(host)
+            self.v_token.set(token)
+            self._remember_changed()
         for child in list(self.winfo_children()):
             child.destroy()
         self.geometry('720x620')
@@ -358,8 +402,8 @@ def _auto_connect(host, game_exe, log_fn):
     saved = _preferences.read()
     with _session_lock:
         if _active and not _active.closed:
-            if not _same_server(getattr(_active, 'host', ''), host):
-                _active.close_reason = ('Editor disconnected: Prefabulator is connected to ' + getattr(_active, 'host', '') +
+            if not _same_server(getattr(_active, 'game_host', getattr(_active, 'host', '')), host):
+                _active.close_reason = ('Editor disconnected: Prefabulator is connected to ' + getattr(_active, 'game_host', getattr(_active, 'host', '')) +
                                         ', but the launcher selected ' + host + '. Open Prefabulator and click Change server / reconnect before joining.')
                 log_fn(_active.close_reason)
                 _active.close()
@@ -368,7 +412,7 @@ def _auto_connect(host, game_exe, log_fn):
                 return
             else:
                 _active.close()
-        if not saved.get('protectedToken') or not _same_server(saved.get('host', ''), host):
+        if not saved.get('protectedToken') or not _same_server(saved.get('gameHost', saved.get('host', '')), host):
             return
         if not (game / 'Mods' / 'PrefabEditor.dll').is_file():
             log_fn('[Prefabulator] Open Prefabulator and install the included player mod first.')
@@ -385,6 +429,7 @@ def _auto_connect(host, game_exe, log_fn):
             bridge = Bridge(client, game, Path(_tavern_data_dir()) / 'prefab_editor',
                             host=saved['host'], token=token)
             bridge.host = saved['host']
+            bridge.game_host = saved.get('gameHost', saved['host'])
             original_close = bridge.close
             def close_session():
                 original_close()

@@ -17,7 +17,7 @@ CHOOSE YOUR INSTALLATION
   For a fresh shared setup, first copy Mods from the All-in-One-Shared-Mods ZIP
   into the shared game folder so the server can start with its core installed.
 
-A source-only add-on downloads the pinned 1.0.17 runtime on first use and verifies
+A source-only add-on downloads the pinned 1.0.18 runtime on first use and verifies
 SHA-256. The player download is about 144 MiB; all-in-one is about 205 MiB. Downloads
 extract runtime/payload files only. The full release ZIPs support offline setup.
 
@@ -41,9 +41,9 @@ Anyone holding the owner console token has full console access; one holder canno
 be revoked individually while they still know that shared token. Keep it private.
 
 Release/download choices:
-https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.17
+https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.18
 Mod source:
-https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.17
+https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.18
 
 CONNECTION TROUBLE
 Use the same server address in Prefabulator and Join Server. A changed address
@@ -54,3 +54,13 @@ and local URL. After connecting, restart the player game if already open.
 MISSING BUTTON: Version 1.0.16 removes a uuid import unavailable in the shipped
 client launcher. Close the client launcher, replace this add-on folder and
 reopen it. No game DLL update, Python installation or server restart is needed.
+
+LOCAL CONSOLE ON YOUR PLAYING COMPUTER
+If you host this server on the computer you play on, but join through a public
+or LAN address, keep that working game address in the main launcher. Open
+Prefabulator and tick "I run this server on THIS computer" before entering the
+owner token. The console uses 127.0.0.1 and stays paired with that game address.
+Optional: Save my access token remembers this pairing for future launches.
+Changing game servers clears the local-console choice and credential. Other
+admins on other computers should leave this option unticked.
+1.0.18 is an add-on-only update; no server restart or DLL update is needed.
