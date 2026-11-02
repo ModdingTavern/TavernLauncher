@@ -35,6 +35,9 @@ def build(parent, window):
     _btn(parent, 'Choose game folder', lambda: choose(), 'primary').pack(anchor='w', padx=12)
     tk.Label(parent, textvariable=status, bg=BG, fg=PARCH, justify='left', wraplength=680).pack(anchor='w', padx=12, pady=12)
     busy = [False]
+    tracked_bridge = [None]
+    details = tk.StringVar(value='')
+    tk.Label(parent, textvariable=details, bg=BG, fg=MUTED, justify='left', wraplength=680).pack(anchor='w', padx=12, pady=4)
 
     def choose():
         path = filedialog.askdirectory(parent=window, title='Choose the game folder containing A Township Tale_Data')
@@ -76,11 +79,12 @@ def build(parent, window):
                 _preferences.save_installation(path, use_shared)
             background(install_included, installed)
 
+    def connection_ready(bridge, path):
+        target = Path(path).resolve() / 'UserData' / 'PrefabEditorConnection.json'
+        details.set('Local connection file: ' + str(target) + '\nLocal editor: ' + bridge.url)
+        return 'CONNECTED. If the game is already open, close and relaunch the player game. Keep Prefabulator open.'
+
     def start_editor():
-        global _active
-        if _active and not _active.closed:
-            status.set('Prefab Editor is already running. Stop it before switching servers.')
-            return
         path = game.get().strip()
         if not (Path(path) / 'Mods' / 'PrefabEditor.dll').is_file():
             status.set('Install the player mod first using the button above.')
@@ -94,19 +98,26 @@ def build(parent, window):
             global _active
             with _session_lock:
                 if _active and not _active.closed:
-                    raise RuntimeError('An editor connection is already running.')
+                    if not _same_server(getattr(_active, 'host', ''), connection_host):
+                        raise RuntimeError('Disconnect the existing editor before changing servers.')
+                    _active.ensure_connection(path)
+                    tracked_bridge[0] = _active
+                    return _active
                 ensure_runtime(shared=_preferences.installation(path) or shared_install())
                 bridge = Bridge(window._ws_client, path, Path(_tavern_data_dir()) / 'prefab_editor',
                                 host=connection_host, token=connection_token,
                                 access_transport=management_transport)
                 bridge.host = connection_host
                 _active = bridge
+                tracked_bridge[0] = bridge
                 try:
                     bridge.start()
-                except Exception:
+                except Exception as error:
+                    bridge.close_reason = 'Editor connection failed: ' + str(error)
                     bridge.close()
                     raise
-        background(connect_editor, lambda _: 'CONNECTED. Launch/join this server and press F1. All editing is in-game. Keep Prefabulator open.')
+                return bridge
+        background(connect_editor, lambda bridge: connection_ready(bridge, path))
 
     def stop_editor():
         if _active and not _active.closed:
@@ -161,10 +172,20 @@ def build(parent, window):
     window.bind('<Destroy>', destroyed, add='+')
 
     def monitor():
-        if _active and not _active.closed and _active.transport.client is window._ws_client and not busy[0]:
-            if not window._connected or not window._ws_client._connected or (_active.process and _active.process.poll() is not None):
-                stop_editor()
-                status.set('Connection stopped. Close/reopen Prefabulator to reconnect, then restart the game.')
+        bridge = tracked_bridge[0]
+        if bridge is not None and not busy[0]:
+            if bridge.closed:
+                details.set('')
+                status.set(bridge.close_reason or 'Connection stopped. Click Retry editor connection, then relaunch the player game.')
+                tracked_bridge[0] = None
+            elif not bridge.transport.client._connected or (bridge.process and bridge.process.poll() is not None):
+                bridge.close_reason = 'Connection stopped. Reconnect Prefabulator, then relaunch the player game.'
+                background(bridge.close, lambda _: bridge.close_reason)
+            else:
+                try:
+                    bridge.ensure_connection()
+                except (OSError, RuntimeError) as error:
+                    status.set('Connection file unavailable: ' + str(error))
         if window.winfo_exists():
             window.after(1500, monitor)
     window.after(1500, monitor)
@@ -267,8 +288,11 @@ def _auto_connect(host, game_exe, log_fn):
     with _session_lock:
         if _active and not _active.closed:
             if not _same_server(getattr(_active, 'host', ''), host):
+                _active.close_reason = 'Editor disconnected: the game launcher and Prefabulator use different server addresses. Use the same address in both, then click Retry editor connection.'
+                log_fn(_active.close_reason)
                 _active.close()
             elif _active.transport.client._connected and _active.process and _active.process.poll() is None:
+                _active.ensure_connection(game)
                 return
             else:
                 _active.close()

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent
@@ -157,12 +158,14 @@ class Bridge:
         self.owns_access_transport = isinstance(self.transport, HttpSessionTransport) and access_transport is None
         self.access_transport = (access_transport or SessionTransport(client)
                                  if isinstance(self.transport, HttpSessionTransport) else self.transport)
-        self.game, self.state = Path(game), Path(state)
+        self.game, self.state = Path(game).resolve(), Path(state)
         self.process = None
         self.connection = self.game / 'UserData' / 'PrefabEditorConnection.json'
         self.previous = None
         self.written = None
+        self.connection_records = {}
         self.closed = False
+        self.close_reason = ''
         self.lifecycle = threading.RLock()
         atexit.register(self.close)
 
@@ -233,14 +236,42 @@ class Bridge:
             with self.lifecycle:
                 if self.closed:
                     raise RuntimeError('Editor startup canceled')
-                self.connection.parent.mkdir(parents=True, exist_ok=True)
-                self.previous = self.connection.read_bytes() if self.connection.exists() else None
-                self.written = json.dumps({'panelUrl': self.url, 'managedBy': 'TavernLauncher'}).encode()
-                self.connection.write_bytes(self.written)
+                self.written = json.dumps({'panelUrl': self.url, 'managedBy': 'TavernLauncher',
+                                           'sessionId': uuid.uuid4().hex}).encode()
+                self.ensure_connection()
             return self.url
         except Exception:
             self.close()
             raise
+
+    def ensure_connection(self, game=None):
+        """Publish/repair the address for this live helper without restarting it."""
+        with self.lifecycle:
+            if (self.closed or not self.process or self.process.poll() is not None
+                    or not self.transport.client._connected or not self.written):
+                raise RuntimeError('Editor connection is stopped. Reconnect Prefabulator first.')
+            target = ((Path(game).resolve() / 'UserData' / 'PrefabEditorConnection.json')
+                      if game is not None else self.connection)
+            current = target.read_bytes() if target.exists() else None
+            owned = self.connection_records.get(target)
+            if owned is not None and current is not None and current != self.written:
+                raise RuntimeError('Another editor connection changed the game connection file. Close the other Prefabulator session and reconnect.')
+            previous = owned[0] if owned is not None else current
+            if current != self.written:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temp = target.with_name(target.name + '.' + uuid.uuid4().hex + '.tmp')
+                try:
+                    temp.write_bytes(self.written)
+                    os.replace(temp, target)
+                finally:
+                    if temp.exists():
+                        temp.unlink()
+            if target.read_bytes() != self.written:
+                raise RuntimeError('Could not verify the game connection file. Reconnect Prefabulator.')
+            self.connection_records[target] = (previous, self.written)
+            if target == self.connection:
+                self.previous = previous
+            return target
 
     def close(self):
         with self.lifecycle:
@@ -258,8 +289,12 @@ class Bridge:
         self.transport.close()
         if self.owns_access_transport:
             self.access_transport.close()
-        if self.written and self.connection.exists() and self.connection.read_bytes() == self.written:
-            if self.previous is None:
-                self.connection.unlink()
-            else:
-                self.connection.write_bytes(self.previous)
+        for target, (previous, written) in list(self.connection_records.items()):
+            try:
+                if target.exists() and target.read_bytes() == written:
+                    if previous is None:
+                        target.unlink()
+                    else:
+                        target.write_bytes(previous)
+            except OSError:
+                pass  # Never remove a file owned by a newer launcher session.

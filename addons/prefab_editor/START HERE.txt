@@ -16,7 +16,7 @@ CHOOSE YOUR INSTALLATION
   For a fresh shared setup, first copy Mods from the All-in-One-Shared-Mods ZIP
   into the shared game folder so the server can start with its core installed.
 
-A source-only add-on downloads the pinned 1.0.14 runtime on first use and verifies
+A source-only add-on downloads the pinned 1.0.15 runtime on first use and verifies
 SHA-256. The player download is about 144 MiB; all-in-one is about 205 MiB. Downloads
 extract runtime/payload files only. The full release ZIPs support offline setup.
 
@@ -38,6 +38,12 @@ Anyone holding the owner console token has full console access; one holder canno
 be revoked individually while they still know that shared token. Keep it private.
 
 Release/download choices:
-https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.14
+https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.15
 Mod source:
-https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.14
+https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.15
+
+CONNECTION TROUBLE
+Use the same server address in Prefabulator and Join Server. A changed address
+now explains why the editor disconnected. Retry editor connection repairs a
+missing descriptor for a live helper. The connected view displays its file path
+and local URL. After connecting, restart the player game if already open.
