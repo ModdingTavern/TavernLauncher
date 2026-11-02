@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.request
 
 ROOT = Path(__file__).resolve().parent
 
@@ -71,13 +72,22 @@ class SessionTransport:
                 event.set()
 
 
-def install(game, side):
+def shared_install():
+    return json.loads((ROOT / 'author.json').read_text(encoding='utf-8')).get('installation') == 'shared'
+
+
+def install(game, side, shared=None):
     game = Path(game)
     if not (game / 'A Township Tale_Data').is_dir():
         raise RuntimeError('Choose the game folder containing A Township Tale_Data, not Mods or the launcher folder.')
     if not (game / 'MelonLoader').is_dir():
         raise RuntimeError('Use Tavern Launcher to patch this game with MelonLoader first.')
     files = ['PrefabEditorCore.dll'] if side == 'server' else ['PrefabEditor.dll', 'PrefabEditorCatalog.json', 'PrefabEditorImages']
+    if side != 'server' and (shared_install() if shared is None else shared):
+        files.append('PrefabEditorCore.dll')
+    for name in files:
+        if not (ROOT / 'payload' / name).exists():
+            raise RuntimeError('Included mod files are missing. Extract the entire Prefabulator ZIP again, including payload.')
     mods = game / 'Mods'
     mods.mkdir(exist_ok=True)
     for name in files:
@@ -90,9 +100,63 @@ def install(game, side):
             shutil.copy2(source, target)
 
 
+class _NoConsoleRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError('Console redirects are not supported.')
+
+
+class HttpSessionTransport:
+    """One POST per command; bypass duplicate WebSocket dispatch on the server."""
+    def __init__(self, client, host, token):
+        if not token:
+            raise RuntimeError('A console token is required.')
+        host = host.strip() or '127.0.0.1'
+        if any(c in host for c in '/?#@\\'):
+            raise ValueError('Enter a server hostname or IP address.')
+        self.client = client
+        self.url = 'http://' + host + ':1761/console'
+        self.token = token
+        self.closed = False
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoConsoleRedirect())
+
+    def capture(self, command, timeout=25):
+        if self.closed or not self.client._connected:
+            raise RuntimeError('Editor disconnected. Reconnect before sending commands.')
+        with self.client._lock:
+            self.client._cmd_id += 1
+            cid = self.client._cmd_id
+        request = urllib.request.Request(self.url,
+            data=json.dumps({'id': cid, 'content': command}).encode('utf-8'),
+            headers={'Authorization': 'Bearer ' + self.token,
+                     'Content-Type': 'application/json'})
+        try:
+            with self.opener.open(request, timeout=timeout) as response:
+                reply = json.load(response)
+            if reply.get('type') != 'CommandResult' or reply.get('commandId') != cid:
+                raise ValueError('Unexpected console response')
+            return reply
+        except Exception as error:
+            # Never retry or fall back to WebSocket: a failed response may
+            # follow a successful mutation, and replaying it duplicates items.
+            raise RuntimeError('HTTP console request failed; command outcome may be unknown. '
+                               'Refresh before retrying. ' + str(error)) from error
+
+    def close(self):
+        self.closed = True
+        self.token = ''
+
+
 class Bridge:
-    def __init__(self, client, game, state):
-        self.transport = SessionTransport(client)
+    def __init__(self, client, game, state, host=None, token=None, access_transport=None):
+        # Personal credentials are authenticated and authorized by the server's
+        # WebSocket access handler; native HTTP only accepts the owner token.
+        self.transport = (HttpSessionTransport(client, host, token)
+                          if host is not None and not (token or '').startswith('pfa1.')
+                          else SessionTransport(client))
+        self.owns_access_transport = isinstance(self.transport, HttpSessionTransport) and access_transport is None
+        self.access_transport = (access_transport or SessionTransport(client)
+                                 if isinstance(self.transport, HttpSessionTransport) else self.transport)
         self.game, self.state = Path(game), Path(state)
         self.process = None
         self.connection = self.game / 'UserData' / 'PrefabEditorConnection.json'
@@ -101,6 +165,12 @@ class Bridge:
         self.closed = False
         self.lifecycle = threading.RLock()
         atexit.register(self.close)
+
+    def capture(self, command):
+        # The server intercepts access queries on WebSocket for owners too.
+        # Keep ordinary owner mutations on HTTP so they are never replayed.
+        transport = self.access_transport if command.startswith('edit access ') else self.transport
+        return transport.capture(command)
 
     def start(self):
         try:
@@ -130,7 +200,7 @@ class Bridge:
                     command = message.get('command')
                     if not isinstance(command, str) or not command.strip() or len(command) > 512000 or '\n' in command or '\r' in command:
                         raise ValueError('Invalid command')
-                    reply = {'id': message['id'], 'result': self.transport.capture(command)}
+                    reply = {'id': message['id'], 'result': self.capture(command)}
                 except Exception as error:
                     reply = {'id': message.get('id'), 'error': str(error)}
                 finally:
@@ -186,6 +256,8 @@ class Bridge:
                 self.process.kill()
                 self.process.wait()
         self.transport.close()
+        if self.owns_access_transport:
+            self.access_transport.close()
         if self.written and self.connection.exists() and self.connection.read_bytes() == self.written:
             if self.previous is None:
                 self.connection.unlink()

@@ -11,24 +11,31 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 _lock = threading.Lock()
-_REQUIRED = ('runtime/node.exe', 'payload/PrefabEditor.dll', 'panel/server.js', 'workbench/server.js')
+_REQUIRED = ('runtime/node.exe', 'payload/PrefabEditor.dll', 'payload/PrefabEditorCatalog.json',
+             'payload/PrefabEditorImages/index.json', 'panel/server.js', 'workbench/server.js')
 _ALLOWED = {'runtime', 'payload', 'panel', 'workbench', 'data'}
 _MAX_DOWNLOAD = 250 * 1024 * 1024
 _MAX_UNPACKED = 800 * 1024 * 1024
 
 
-def ensure_runtime():
+def ensure_runtime(shared=False):
     with _lock:
         manifest = json.loads((ROOT / 'release.json').read_text(encoding='utf-8'))
+        selected = manifest['shared'] if shared else manifest
+        required = _REQUIRED + (('payload/PrefabEditorCore.dll',) if shared else ())
+        accepted = {selected['sha256']}
+        if not shared and 'shared' in manifest:
+            # The verified all-in-one runtime also contains every player runtime file.
+            accepted.add(manifest['shared']['sha256'])
         marker = ROOT / '.runtime-version'
-        if marker.is_file() and marker.read_text() == manifest['sha256'] and all((ROOT / p).is_file() for p in _REQUIRED):
+        if marker.is_file() and marker.read_text() in accepted and all((ROOT / p).is_file() for p in required):
             return
         with tempfile.TemporaryDirectory(prefix='prefabulator-', dir=str(ROOT)) as directory:
             temp = Path(directory)
             archive = temp / 'runtime.zip'
             digest = hashlib.sha256()
             total = 0
-            request = urllib.request.Request(manifest['url'], headers={'User-Agent': 'Tavern-Prefabulator'})
+            request = urllib.request.Request(selected['url'], headers={'User-Agent': 'Tavern-Prefabulator'})
             try:
                 with urllib.request.urlopen(request, timeout=30) as response, archive.open('wb') as output:
                     while True:
@@ -40,7 +47,7 @@ def ensure_runtime():
                             raise RuntimeError('Runtime download exceeds the expected size.')
                         digest.update(block)
                         output.write(block)
-                if digest.hexdigest() != manifest['sha256']:
+                if digest.hexdigest() != selected['sha256']:
                     raise RuntimeError('Runtime checksum did not match. Download was not installed.')
                 stage = temp / 'files'
                 with zipfile.ZipFile(archive) as bundle:
@@ -65,13 +72,14 @@ def ensure_runtime():
                         target.parent.mkdir(parents=True, exist_ok=True)
                         with bundle.open(entry) as source, target.open('wb') as output:
                             shutil.copyfileobj(source, output)
-                if not all((stage / p).is_file() for p in _REQUIRED):
+                if not all((stage / p).is_file() for p in required):
                     raise RuntimeError('Runtime archive is incomplete.')
                 for source in stage.rglob('*'):
                     if source.is_file():
                         target = ROOT / source.relative_to(stage)
                         target.parent.mkdir(parents=True, exist_ok=True)
                         os.replace(source, target)
-                marker.write_text(manifest['sha256'])
+                marker.write_text(selected['sha256'])
             except Exception as error:
-                raise RuntimeError('Could not install the Prefabulator runtime. Check your internet connection and retry, or extract the full Player-Addon-and-Mod release beside Tavern Launcher. ' + str(error)) from error
+                package = 'All-in-One-Shared-Mods' if shared else 'Player-Addon-and-Mod'
+                raise RuntimeError('Could not install the Prefabulator runtime. Check your internet connection and retry, or extract the full ' + package + ' release beside Tavern Launcher. ' + str(error)) from error

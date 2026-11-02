@@ -44,6 +44,27 @@ class Settings:
     def token(self, data):
         return protect(data["protectedToken"], True) if data.get("protectedToken") else ""
 
+    def _installation_choices(self):
+        try:
+            data = json.loads(self.path.with_name('installation.json').read_text(encoding='utf-8'))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def installation(self, game):
+        key = str(Path(game).expanduser().resolve()).casefold()
+        return self._installation_choices().get(key) is True
+
+    def save_installation(self, game, shared):
+        # The mode belongs to this game folder, independently of server/token settings.
+        choices = self._installation_choices()
+        choices[str(Path(game).expanduser().resolve()).casefold()] = bool(shared)
+        target = self.path.with_name('installation.json')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_suffix('.tmp')
+        temp.write_text(json.dumps(choices), encoding='utf-8')
+        os.replace(temp, target)
+
     def save(self, host, token="", remember=False):
         data = {"host": host.strip() or "127.0.0.1"}
         if remember and token:

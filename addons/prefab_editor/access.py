@@ -4,6 +4,7 @@ import json
 import threading
 import tkinter as tk
 from tkinter import messagebox
+from .invite import make_code
 from tavern_shared.theme import BG, PARCH, MUTED, _btn
 
 TABS = [('select', 'Select'), ('arrange', 'Arrange'), ('build', 'Build'), ('world', 'World'),
@@ -28,18 +29,19 @@ def request(transport, action, **fields):
 
 
 class AccessWindow(tk.Toplevel):
-    def __init__(self, parent, transport):
+    def __init__(self, parent, transport, host=None):
         super().__init__(parent)
         self.title('Manage Admin Access - owner only')
         self.configure(bg=BG)
         self.geometry('700x670')
         self.transport = transport
+        self.host = host
         self.records = []
         self.selected_id = None
         self.busy = False
         self.status = tk.StringVar(value='Checking owner access...')
         self.name = tk.StringVar()
-        tk.Label(self, text='Give each admin a personal token and choose their tabs.', bg=BG, fg=PARCH).pack(pady=8)
+        tk.Label(self, text='Give each moderator a private access code and choose their tabs.', bg=BG, fg=PARCH).pack(pady=8)
         self.listbox = tk.Listbox(self, height=7, exportselection=False)
         self.listbox.pack(fill='x', padx=12)
         self.listbox.bind('<<ListboxSelect>>', self.select)
@@ -57,10 +59,10 @@ class AccessWindow(tk.Toplevel):
                  bg=BG, fg=MUTED, justify='left', wraplength=650).pack(anchor='w', padx=12, pady=8)
         row = tk.Frame(self, bg=BG); row.pack(fill='x', padx=12)
         _btn(row, 'New admin', self.new).pack(side='left')
-        _btn(row, 'Create token / Save permissions', self.save, 'primary').pack(side='left', padx=6)
+        _btn(row, 'Create code / Save permissions', self.save, 'primary').pack(side='left', padx=6)
         row = tk.Frame(self, bg=BG); row.pack(fill='x', padx=12, pady=8)
         _btn(row, 'Revoke selected admin', self.revoke).pack(side='left')
-        _btn(row, 'Replace selected token', self.rotate).pack(side='left', padx=6)
+        _btn(row, 'Replace selected code', self.rotate).pack(side='left', padx=6)
         _btn(row, 'Refresh', self.refresh).pack(side='left')
         tk.Label(self, textvariable=self.status, bg=BG, fg=PARCH, wraplength=650, justify='left').pack(fill='x', padx=12, pady=10)
         self.run(lambda: request(transport, 'self'), self.authorized)
@@ -100,7 +102,7 @@ class AccessWindow(tk.Toplevel):
         self.listbox.selection_clear(0, 'end')
         self.name.set('')
         self.set_tabs(False)
-        self.status.set('Enter a name, choose tabs, then Create token. No tabs are enabled by default.')
+        self.status.set('Enter a name, choose tabs, then Create code. No tabs are enabled by default.')
 
     def select(self, event=None):
         selection = self.listbox.curselection()
@@ -151,10 +153,11 @@ class AccessWindow(tk.Toplevel):
     def changed(self, result):
         token = result.get('token')
         if token:
-            popup = tk.Toplevel(self); popup.title('Personal admin token - shown once')
-            tk.Label(popup, text='Send this token privately to this admin. It cannot be shown again.\nThey enter it in Prefabulator in place of the owner console token.').pack(padx=12, pady=12)
-            entry = tk.Entry(popup, width=95); entry.insert(0, token); entry.configure(state='readonly'); entry.pack(padx=12)
+            credential = make_code(self.host, token) if self.host else token
+            popup = tk.Toplevel(self); popup.title('Moderator access code - shown once')
+            tk.Label(popup, text='Send this code privately to this moderator. It cannot be shown again.\nPaste it into Prefabulator and click Connect. The code includes the server address.').pack(padx=12, pady=12)
+            entry = tk.Entry(popup, width=95); entry.insert(0, credential); entry.configure(state='readonly'); entry.pack(padx=12)
             def copy():
-                popup.clipboard_clear(); popup.clipboard_append(token)
-            tk.Button(popup, text='Copy token', command=copy).pack(pady=12)
+                popup.clipboard_clear(); popup.clipboard_append(credential)
+            tk.Button(popup, text='Copy moderator code', command=copy).pack(pady=12)
         self.refresh()

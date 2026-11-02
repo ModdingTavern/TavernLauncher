@@ -1,32 +1,43 @@
-PREFABULATOR
-
-This source integration targets Tavern Launcher 1.8.5.
+PREFABULATOR - TAVERN LAUNCHER 1.8.5 ADD-ON
 
 Enable Prefabulator in the client launcher Addons window and restart the launcher.
-Click Prefabulator on the main launcher. Enter the server address and your
-access token (owner console token or personal token). The address is remembered. Save my access token is optional and
-uses Windows account encryption; it enables auto-connect when launching that
-server through Tavern.
+Open Prefabulator on the main launcher. Enter the server address and owner console
+token, or paste your personal moderator code. The address is remembered. Saving
+access is optional and encrypted for your Windows account; it enables auto-connect
+when launching that server. All editing happens IN GAME with F1.
 
-Close the game and click Install / update player mod. A source-only installation
-downloads the pinned runtime on first use (about 144 MiB); keep internet access
-available. The full Player-Addon-and-Mod release includes everything for offline
-installation. Click Connect, wait for CONNECTED, launch the game, and press F1.
-Keep Tavern Launcher open while playing. All editing happens in game.
+CHOOSE YOUR INSTALLATION
+- Separate server and player game folders: leave the shared-folder box UNCHECKED.
+  Close the player game and click Install / update player mod. The server owner
+  separately installs PrefabEditorCore.dll from the Server-Mod-Only release.
+- Server and player use ONE game / Mods folder: tick the shared-folder box for
+  that game folder. Stop BOTH processes before installing. The button installs
+  both DLLs together. This choice is remembered only for that game folder.
+  For a fresh shared setup, first copy Mods from the All-in-One-Shared-Mods ZIP
+  into the shared game folder so the server can start with its core installed.
 
-The server owner installs the separate Server-Mod-Only release into the SERVER
-Mods folder and restarts the server. The server requires a working Tavern
-remote console. Anyone with the owner console token has full console access.
-You cannot revoke just one person's access while they still know that shared
-token. Keep it private and give other admins personal tokens instead.
+A source-only add-on downloads the pinned 1.0.14 runtime on first use and verifies
+SHA-256. The player download is about 144 MiB; all-in-one is about 205 MiB. Downloads
+extract runtime/payload files only. The full release ZIPs support offline setup.
 
-Source and releases: https://github.com/calebv2/ATT-Prefab-Editor
+Start the server, connect Prefabulator, wait for CONNECTED, then launch/join the
+player game and press F1. Keep Tavern Launcher and Prefabulator open; minimize them
+if needed. After changing connections or updating, restart the player game.
 
-Owners: connect with your owner console token and use Manage Admin Access to
-create named personal tokens, choose tabs, update permissions or revoke access.
-Give each admin their personal token; keep the owner console token private.
-Both player and server packages must be 1.0.6 or newer.
+UPDATING
+Separate setup: stop the player game to update player files; stop the server to
+replace its core DLL. Shared setup: stop BOTH before replacing shared files.
+Keep existing UserData, server keys, admin-access.json and teleporter-links.json.
+No teleporter relinking is required. Player mod 2.3.5 and core 1.6.5 are included.
 
-In 1.0.7, linked teleporter destination chunks start loading on touch and
-the player travels after the platform animation finishes. The server owner
-must install Server-Mod-Only 1.0.7 and restart the server for this fix.
+PERSONAL ADMIN ACCESS
+Owner: connect with your owner console token and use Manage Admin Access to create
+named moderator codes, choose allowed tabs, change permissions or revoke access.
+Give each moderator their own code. The server enforces permissions and revocation.
+Anyone holding the owner console token has full console access; one holder cannot
+be revoked individually while they still know that shared token. Keep it private.
+
+Release/download choices:
+https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.14
+Mod source:
+https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.14
