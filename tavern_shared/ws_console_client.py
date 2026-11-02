@@ -7,6 +7,14 @@ import json
 import threading
 
 WS_CONSOLE_PORT = 1760
+PING_INTERVAL   = 20
+
+def _exception_text(exc):
+    if not exc:
+        return None
+    if isinstance(exc, dict):
+        return str(exc.get("Message") or exc.get("ClassName") or exc)
+    return str(exc)
 
 class WsConsoleClient:
     """WebSocket client for the game console on port 1760."""
@@ -40,6 +48,7 @@ class WsConsoleClient:
                     self._ws = ws
                     self._connected = True
                     threading.Thread(target=self._recv_loop, daemon=True).start()
+                    threading.Thread(target=self._ping_loop, args=(ws,), daemon=True).start()
                     return True, data
                 ws.close()
                 return False, data
@@ -62,15 +71,17 @@ class WsConsoleClient:
             self._pending.clear()
 
     def send(self, cmd):
+        """Fire and forget. Returns False if the command was not sent."""
         if not self._connected or not self._ws:
-            return
+            return False
         with self._lock:
             self._cmd_id += 1
             cid = self._cmd_id
         try:
             self._ws.send(json.dumps({"id": cid, "content": cmd}))
         except Exception:
-            pass
+            return False
+        return True
 
     def send_capture(self, cmd, timeout=20.0):
         if not self._connected or not self._ws:
@@ -90,7 +101,27 @@ class WsConsoleClient:
         ev.wait(timeout)
         with self._lock:
             self._pending.pop(cid, None)
+        if not ev.is_set():
+            return "", None, f"No reply after {timeout:g}s"
         return holder["result_string"], holder["result_data"], holder["error"]
+
+    def _lost(self, ws, reason):
+        """The link behind ws died. Fails every pending capture and calls
+        on_disc once, however many threads notice."""
+        with self._lock:
+            if not self._connected or self._ws is not ws:
+                return
+            self._connected = False
+            self._ws = None
+            self._stop.set()
+            for ev, holder in self._pending.values():
+                holder["error"] = reason
+                ev.set()
+            self._pending.clear()
+        try: ws.shutdown()
+        except: pass
+        if self._on_disc:
+            self._on_disc(reason)
 
     def _recv_loop(self):
         ws = self._ws
@@ -98,19 +129,23 @@ class WsConsoleClient:
             try:
                 raw = ws.recv()
                 if not raw:
+                    # recv() returns "" when the server sends a close frame
+                    self._lost(ws, "Server closed the connection")
                     break
                 self._handle(raw)
             except Exception as e:
                 if not self._stop.is_set():
-                    self._connected = False
-                    reason = str(e) or "Connection lost"
-                    if self._on_disc:
-                        self._on_disc(reason)
-                    with self._lock:
-                        for ev, holder in self._pending.values():
-                            holder["error"] = reason
-                            ev.set()
-                        self._pending.clear()
+                    self._lost(ws, str(e) or "Connection lost")
+                break
+
+    def _ping_loop(self, ws):
+        # A half-open link is only noticed when we write to it. Ping only,
+        # no pong deadline, so a server that never answers is fine.
+        while not self._stop.wait(PING_INTERVAL) and self._ws is ws:
+            try:
+                ws.ping()
+            except Exception as e:
+                self._lost(ws, str(e) or "Connection lost")
                 break
 
     def _handle(self, raw):
@@ -127,13 +162,17 @@ class WsConsoleClient:
         if msg_type == "CommandResult":
             rs = ""
             rd = None
+            err = None
             if isinstance(data, dict):
                 rs = str(data.get("ResultString") or "")
                 rd = data.get("Result")
+                err = _exception_text(data.get("Exception"))
             elif data is not None:
                 rs = str(data)
             if self._on_line:
-                if rs and not rs.startswith("System."):
+                if err:
+                    self._on_line(f"Error: {err}\n")
+                elif rs and not rs.startswith("System."):
                     self._on_line(rs if rs.endswith("\n") else rs + "\n")
                 elif rd is not None and rd != [] and rd != "":
                     # ResultString was a useless type name; show structured data
@@ -149,6 +188,7 @@ class WsConsoleClient:
                 if entry:
                     entry[1]["result_string"] = rs
                     entry[1]["result_data"]   = rd
+                    entry[1]["error"]         = err
                     entry[0].set()
 
         elif msg_type == "SystemMessage":

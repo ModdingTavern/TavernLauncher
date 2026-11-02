@@ -1466,7 +1466,7 @@ class TavernKeeperWindow(tk.Toplevel):
         stats_frame = tk.Frame(inner, bg=BG)
         stats_frame.pack(fill="x", padx=8, pady=(0,12))
         self._stat_vars = {}  # name -> DoubleVar
-        stats = [('health', 'Health', 0, 2), ('maxhealth', 'Max Health', 0, 31), ('speed', 'Speed', 0, 15), ('damage', 'Damage', 0, 15), ('poison', 'Poison', 0, 31), ('hunger', 'Hunger', 0, 2), ('damageprotection', 'Damage Protection', 0.1, 10), ('luminosity', 'Luminosity', 0, 15), ('cripplehealth', 'Cripple Health', 0, 1), ('xpboost', 'XP Boost', 0.1, 10), ('nightmare', 'Nightmare', 0, 1), ('fullness', 'Fullness', 0, 6), ('left-hand-stamina', 'L. Stamina', 0, 0.2), ('right-hand-stamina', 'R. Stamina', 0, 0.2), ('aggro', 'Aggro', 1, 10), ('Frost', 'Frost', 0, 1)]
+        stats = [('health', 'Health', 0, 2), ('maxhealth', 'Max Health', 0, 31), ('speed', 'Speed', 0, 15), ('damage', 'Damage', 0, 15), ('poison', 'Poison', 0, 31), ('hunger', 'Hunger', 0, 2), ('damageprotection', 'Damage Protection', 0.1, 10), ('crippledamageprotection', 'Cripple Dmg Protection', 0.1, 10), ('luminosity', 'Luminosity', 0, 15), ('cripplehealth', 'Cripple Health', 0, 1), ('xpboost', 'XP Boost', 0.1, 10), ('nightmare', 'Nightmare', 0, 1), ('fullness', 'Fullness', 0, 6), ('left-hand-stamina', 'L. Stamina', 0, 0.2), ('right-hand-stamina', 'R. Stamina', 0, 0.2), ('maxHandStamina', 'Max Hand Stamina', 0.2, 0.4), ('aggro', 'Aggro', 1, 10), ('Frost', 'Frost', 0, 1), ('playerweight', 'Player Weight', 0, 99999), ('recentdamage', 'Recent Damage', 0, 1)]
         for i, (stat_name, label, smin, smax) in enumerate(stats):
             col = i % 2
             row_idx = i // 2
@@ -1568,6 +1568,7 @@ class TavernKeeperWindow(tk.Toplevel):
                                 self._stat_vars[n].set(round(float(v), 4))
                             except Exception:
                                 pass
+
         self._send(f"player set-stat {self._q(target)} {stat_name} {value}")
         self._send_and_capture(f"player list-stats {self._q(target)}", on_refresh)
 

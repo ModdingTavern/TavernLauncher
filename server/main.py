@@ -11,6 +11,7 @@ identical comment on why.
 import sys
 import os
 import traceback
+from tkinter import messagebox
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -42,6 +43,7 @@ from server.core import addon_loader
 addon_loader.load_enabled_addons("server", _write_error_log)
 
 from server.core.launcher_window import ServerLauncher, _updater
+from server.core.data_store import UsersSaveError
 
 if __name__ == "__main__":
     if _updater is not None:
@@ -51,6 +53,9 @@ if __name__ == "__main__":
 
     def _log_callback_exception(exc, val, tb):
         _write_error_log("".join(traceback.format_exception(exc, val, tb)))
+        if isinstance(val, UsersSaveError):  # an admin action that couldn't be saved
+            try: messagebox.showerror("Could not save", str(val), parent=app)
+            except Exception: pass
     app.report_callback_exception = _log_callback_exception
 
     app.mainloop()
