@@ -9,7 +9,7 @@ from tavern_shared.theme import BG, PARCH, MUTED, _btn
 
 TABS = [('select', 'Select'), ('arrange', 'Arrange'), ('build', 'Build'), ('world', 'World'),
         ('admin', 'Admin'), ('boards', 'Info boards'), ('objectLoader', 'Object Loader'),
-        ('teleporter', 'Teleporter'), ('trading', 'Trading'), ('settings', 'Server Settings')]
+        ('teleporter', 'Teleporter'), ('trading', 'Trading'), ('settings', 'Server Settings'), ('console', 'Console')]
 
 
 def request(transport, action, **fields):
@@ -55,7 +55,7 @@ class AccessWindow(tk.Toplevel):
         for index, (key, label) in enumerate(TABS):
             tk.Checkbutton(checks, text=label, variable=self.tabs[key], bg=BG, fg=PARCH,
                            selectcolor=BG).grid(row=index//2, column=index%2, sticky='w')
-        tk.Label(self, text='All tabs grants gameplay tools. Only the owner can manage admin access.\nUndo/redo requires Select, Arrange and Build because their history is shared.',
+        tk.Label(self, text='Console allows unrestricted server commands. All tabs includes Console.\nOnly the owner can manage admin access. Undo/redo requires Select, Arrange and Build.',
                  bg=BG, fg=MUTED, justify='left', wraplength=650).pack(anchor='w', padx=12, pady=8)
         row = tk.Frame(self, bg=BG); row.pack(fill='x', padx=12)
         _btn(row, 'New admin', self.new).pack(side='left')

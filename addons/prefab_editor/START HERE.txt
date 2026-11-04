@@ -17,7 +17,7 @@ CHOOSE YOUR INSTALLATION
   For a fresh shared setup, first copy Mods from the All-in-One-Shared-Mods ZIP
   into the shared game folder so the server can start with its core installed.
 
-A source-only add-on downloads the pinned 1.0.19 runtime on first use and verifies
+A source-only add-on downloads the pinned 1.0.20 runtime on first use and verifies
 SHA-256. The player download is about 144 MiB; all-in-one is about 205 MiB. Downloads
 extract runtime/payload files only. The full release ZIPs support offline setup.
 
@@ -31,7 +31,7 @@ UPDATING
 Separate setup: stop the player game to update player files; stop the server to
 replace its core DLL. Shared setup: stop BOTH before replacing shared files.
 Keep existing UserData, server keys, admin-access.json and teleporter-links.json.
-No teleporter relinking is required. Player mod 2.3.6 and core 1.6.5 are included.
+No teleporter relinking is required. Player mod 2.3.7 and core 1.6.6 are included.
 
 PERSONAL ADMIN ACCESS
 Owner: connect with your owner console token and use Manage Admin Access to create
@@ -41,9 +41,9 @@ Anyone holding the owner console token has full console access; one holder canno
 be revoked individually while they still know that shared token. Keep it private.
 
 Release/download choices:
-https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.19
+https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.20
 Mod source:
-https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.19
+https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.20
 
 CONNECTION TROUBLE
 Use the same server address in Prefabulator and Join Server. A changed address
@@ -64,8 +64,14 @@ Optional: Save my access token remembers this pairing for future launches.
 Changing game servers clears the local-console choice and credential. Other
 admins on other computers should leave this option unticked.
 
-UPDATE 1.0.19
-Update the player mod to 2.3.6 using the install/update button with the game closed.
-Replacing only the add-on will not install the broadcast typing fix. Stop BOTH
-processes first when updating one shared server/player Mods folder. Server core
-1.6.5 is unchanged. Admin broadcast accepts typing and has a Paste message button.
+CONSOLE TAB - REQUIRES PLAYER 2.3.7 AND SERVER CORE 1.6.6
+Update BOTH mods before using Console; restart the game server after its update.
+In game, press F1, open Console, enter one command, and click Run command. The
+reply appears below. Use Paste command, Previous/Next command, Copy output and
+Clear output as needed. Commands are sent once; check the result before retrying
+if the connection fails. History is kept only until the game closes.
+Owner: Manage Admin Access > select the moderator > tick Console > Save permissions.
+Existing moderator codes stay valid, but Console is OFF until you enable it.
+Console allows unrestricted server commands. All tabs includes Console. Only the
+owner can manage access profiles. Give Console only to admins you trust with full
+server command access.
