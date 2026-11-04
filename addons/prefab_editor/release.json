@@ -1,10 +1,10 @@
 {
-  "version": "1.0.20",
-  "url": "https://github.com/calebv2/ATT-Prefab-Editor/releases/download/prefabulator-v1.0.20/Prefab-Editor-Player-Addon-and-Mod-1.0.20.zip",
-  "sha256": "97e88c9da7bfa21bd7e96032ad408e716ca5d3ecac2934a634cb4cb5d7b6a468",
-  "source": "https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.20",
+  "version": "1.0.21",
+  "url": "https://github.com/calebv2/ATT-Prefab-Editor/releases/download/prefabulator-v1.0.21/Prefab-Editor-Player-Addon-and-Mod-1.0.21.zip",
+  "sha256": "b88c820bb81f93a2c4af0bf526f2557b3d307b85d66bab5eb4ebe6ef7e5a4f05",
+  "source": "https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.21",
   "shared": {
-    "url": "https://github.com/calebv2/ATT-Prefab-Editor/releases/download/prefabulator-v1.0.20/Prefab-Editor-All-in-One-Shared-Mods-1.0.20.zip",
-    "sha256": "8629690a27fecc3c06d149eb7529191a491645493139e12caef8ab2850bd0484"
+    "url": "https://github.com/calebv2/ATT-Prefab-Editor/releases/download/prefabulator-v1.0.21/Prefab-Editor-All-in-One-Shared-Mods-1.0.21.zip",
+    "sha256": "0201ee0447e643b2d17e4baedd35928e2e0b3c0e3f25ad16067c62c43cc2a04a"
   }
 }

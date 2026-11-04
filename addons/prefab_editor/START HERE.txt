@@ -17,7 +17,7 @@ CHOOSE YOUR INSTALLATION
   For a fresh shared setup, first copy Mods from the All-in-One-Shared-Mods ZIP
   into the shared game folder so the server can start with its core installed.
 
-A source-only add-on downloads the pinned 1.0.20 runtime on first use and verifies
+A source-only add-on downloads the pinned 1.0.21 runtime on first use and verifies
 SHA-256. The player download is about 144 MiB; all-in-one is about 205 MiB. Downloads
 extract runtime/payload files only. The full release ZIPs support offline setup.
 
@@ -31,7 +31,7 @@ UPDATING
 Separate setup: stop the player game to update player files; stop the server to
 replace its core DLL. Shared setup: stop BOTH before replacing shared files.
 Keep existing UserData, server keys, admin-access.json and teleporter-links.json.
-No teleporter relinking is required. Player mod 2.3.7 and core 1.6.6 are included.
+No teleporter relinking is required. Player mod 2.3.8 and core 1.6.6 are included.
 
 PERSONAL ADMIN ACCESS
 Owner: connect with your owner console token and use Manage Admin Access to create
@@ -41,9 +41,9 @@ Anyone holding the owner console token has full console access; one holder canno
 be revoked individually while they still know that shared token. Keep it private.
 
 Release/download choices:
-https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.20
+https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.21
 Mod source:
-https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.20
+https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.21
 
 CONNECTION TROUBLE
 Use the same server address in Prefabulator and Join Server. A changed address
@@ -75,3 +75,19 @@ Existing moderator codes stay valid, but Console is OFF until you enable it.
 Console allows unrestricted server commands. All tabs includes Console. Only the
 owner can manage access profiles. Give Console only to admins you trust with full
 server command access.
+
+UPDATE 1.0.21
+Update the player mod to 2.3.8 after replacing the add-on; replacing the add-on
+alone does not update the in-game editor. Keep server core 1.6.6. Shared Mods
+users must stop BOTH processes before replacing files.
+
+PREFABS AND STRINGS
+Build now has Prefabs and Strings sections. The old JSON import is called Prefabs;
+your existing saved prefab files still work.
+To spawn a local item string: press F1 > Build > Strings > Browse string file or
+Browse string folder. Choose the folder containing your .txt files. Search by
+name, select a variant, then click Spawn selected string. It appears 3 m in front
+of the editor camera. You can also use Read strings from clipboard.
+Files with several labeled strings show separate choices. Instruction-only files
+are skipped. Generator code is ignored and file warnings are shown before spawning.
+Each click spawns ONE selected variant. String spawning uses the Build permission.
