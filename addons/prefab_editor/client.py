@@ -11,7 +11,7 @@ from client.core.addon_hooks import register_launcher_action, register_before_la
 from .release import ensure_runtime
 from tavern_shared.paths import _tavern_data_dir
 from tavern_shared.theme import BG, PARCH, MUTED, _btn
-from .runtime import Bridge, install, shared_install, SessionTransport
+from .runtime import Bridge, connection_diagnostics, install, shared_install, SessionTransport
 from .invite import PREFIX, read_code
 from .settings import Settings
 from .access import AccessWindow, request as access_request
@@ -138,8 +138,11 @@ def build(parent, window):
     update_install_label()
     if window._launcher is not None:
         _btn(parent, 'Change server / reconnect', window._reopen_connection, 'primary').pack(anchor='w', padx=12, pady=6)
-    _btn(parent, 'Retry editor connection', start_editor, 'primary').pack(anchor='w', padx=12, pady=6)
-    _btn(parent, 'Disconnect editor', stop_editor).pack(anchor='w', padx=12, pady=6)
+    connection_actions = tk.Frame(parent, bg=BG)
+    connection_actions.pack(anchor='w', padx=12, pady=6)
+    _btn(connection_actions, 'Retry editor connection', start_editor, 'primary').pack(side='left')
+    _btn(connection_actions, 'Disconnect editor', stop_editor).pack(side='left', padx=6)
+    _btn(connection_actions, 'Connection diagnostics', lambda: window._show_connection_diagnostics(game.get().strip())).pack(side='left')
     def forget_token():
         try:
             _preferences.save(_preferences.read().get('host', ''), game_host=_preferences.read().get('gameHost'))
@@ -151,8 +154,17 @@ def build(parent, window):
     # Personal sessions already have a transport owned by their editor bridge.
     management_transport = (None if window.v_token.get().strip().startswith('pfa1.')
                             else SessionTransport(window._ws_client))
-    owner_button = _btn(parent, 'Manage Admin Access (owner)', lambda: AccessWindow(
-        window, management_transport, window._game_host or window.v_host.get().strip() or '127.0.0.1'))
+    access_window = [None]
+
+    def show_access():
+        existing = access_window[0]
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            return
+        access_window[0] = AccessWindow(window, management_transport,
+                                       window._game_host or window.v_host.get().strip() or '127.0.0.1')
+
+    owner_button = _btn(parent, 'Manage Admin Access (owner)', show_access)
     def check_owner():
         if management_transport is None:
             return
@@ -213,6 +225,74 @@ class PrefabulatorWindow(TavernKeeperWindow):
         if self._launcher is not None:
             return self._launcher.v_ip.get().strip() or '127.0.0.1'
         return None
+
+    def _show_connection_diagnostics(self, game_folder=None):
+        existing = getattr(self, '_diagnostics_window', None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            return
+        if game_folder is None:
+            game_exe = load_cfg().get('game_exe')
+            game_folder = str(Path(game_exe).parent) if game_exe else ''
+        process = getattr(_active, 'process', None)
+        helper_pid = process.pid if process and process.poll() is None else None
+
+        dialog = tk.Toplevel(self)
+        self._diagnostics_window = dialog
+        dialog.title('Prefabulator connection diagnostics')
+        dialog.configure(bg=BG)
+        dialog.geometry('700x465')
+        dialog.minsize(460, 320)
+        tk.Label(dialog, text='Connection diagnostics', bg=BG, fg=PARCH,
+                 font=('Segoe UI', 14, 'bold')).pack(anchor='w', padx=14, pady=12)
+        frame = tk.Frame(dialog, bg=BG)
+        frame.pack(fill='both', expand=True, padx=14)
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side='right', fill='y')
+        body = tk.Text(frame, wrap='word', bg='#20252d', fg=PARCH, padx=10, pady=8,
+                       font=('Segoe UI', 10), yscrollcommand=scrollbar.set)
+        body.pack(side='left', fill='both', expand=True)
+        scrollbar.configure(command=body.yview)
+        body.insert('1.0', 'Checking the selected game folder, editor helpers and local ports...')
+        body.configure(state='disabled')
+        actions = tk.Frame(dialog, bg=BG)
+        actions.pack(fill='x', padx=14, pady=10)
+        report = []
+        job = [None]
+
+        def copy_report():
+            dialog.clipboard_clear()
+            dialog.clipboard_append(report[0])
+
+        copy_button = _btn(actions, 'Copy report', copy_report)
+        copy_button.configure(state='disabled')
+        copy_button.pack(side='left')
+        _btn(actions, 'Close', dialog.destroy).pack(side='right')
+
+        def scan():
+            try:
+                report.append(connection_diagnostics(game_folder, helper_pid))
+            except Exception:
+                report.append('Could not complete the local diagnostics. Close this window and try again.')
+
+        def show_report():
+            job[0] = None
+            if not report:
+                job[0] = dialog.after(100, show_report)
+                return
+            body.configure(state='normal')
+            body.delete('1.0', 'end')
+            body.insert('1.0', report[0])
+            body.configure(state='disabled')
+            copy_button.configure(state='normal')
+
+        def stop_polling(event):
+            if event.widget is dialog and job[0] is not None:
+                dialog.after_cancel(job[0])
+
+        dialog.bind('<Destroy>', stop_polling, add='+')
+        threading.Thread(target=scan, daemon=True).start()
+        job[0] = dialog.after(100, show_report)
 
     def _update_server_status(self):
         host = self.v_host.get().strip() or '127.0.0.1'
@@ -306,6 +386,7 @@ class PrefabulatorWindow(TavernKeeperWindow):
                        bg=BG, fg=PARCH, selectcolor=BG, wraplength=390).pack(fill='x', padx=20)
         tk.Label(self, text='Moderator: paste your code and click Connect. Its server will also be selected in the main launcher.\nSaved tokens are encrypted for this Windows account.',
                  bg=BG, fg=MUTED, wraplength=390, justify='left').pack(padx=20, pady=8)
+        _btn(self, 'Connection diagnostics', self._show_connection_diagnostics).pack(anchor='w', padx=20, pady=(0, 8))
         self.v_host.trace_add('write', self._host_changed)
         self.update_idletasks()
         self.geometry('460x' + str(self.winfo_reqheight()))

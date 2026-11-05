@@ -3,6 +3,7 @@ import atexit
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import threading
@@ -10,6 +11,104 @@ import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent
+
+
+def connection_diagnostics(game_folder, helper_pid):
+    lines = []
+    descriptor_port = None
+    if game_folder:
+        game = Path(game_folder)
+        try:
+            mods = game / 'Mods'
+            names = sorted((p.name for p in mods.iterdir() if p.is_file() and p.suffix.lower() == '.dll'
+                            and 'prefabeditor' in re.sub(r'[^a-z0-9]', '', p.stem.lower())), key=str.lower)
+            lines.append('Prefabulator DLLs in selected Mods folder: ' + (', '.join(names) or 'none'))
+            core_count = sum('prefabeditorcore' in re.sub(r'[^a-z0-9]', '', name.lower()) for name in names)
+            if core_count > 1 or len(names) - core_count > 1:
+                lines.append('Possible duplicate DLLs. Check the game startup log to see which copies loaded.')
+            elif core_count == 1 and len(names) == 2:
+                lines.append('One player DLL and one server DLL are expected in a shared Mods folder.')
+        except OSError:
+            lines.append('Could not read the selected game’s Mods folder.')
+        descriptor = game / 'UserData' / 'PrefabEditorConnection.json'
+        try:
+            with descriptor.open('rb') as handle:
+                data = json.loads(handle.read(8192))
+            url = data.get('panelUrl') if isinstance(data, dict) else None
+            match = re.fullmatch(r'http://127\.0\.0\.1:(\d{1,5})/?', url or '') if isinstance(url, str) else None
+            if match and 0 < int(match[1]) <= 65535:
+                descriptor_port = int(match[1])
+                lines.append('Game connection file points to local port ' + str(descriptor_port) + '.')
+            else:
+                lines.append('Game connection file has no valid local editor address.')
+        except FileNotFoundError:
+            lines.append('No game connection file. It is normally created when Prefabulator connects.')
+        except (OSError, ValueError):
+            lines.append('Could not read the game connection file.')
+    else:
+        lines.append('Choose the game folder to check its installed DLLs and connection file.')
+    lines.append('This launcher’s active editor helper PID: ' + (str(helper_pid) if helper_pid else 'none'))
+    if os.name != 'nt':
+        return '\n\n'.join(lines + ['Process and port checks are available on Windows.'])
+
+    # Match the packaged helper by its executable and script. Keep command lines
+    # in the PowerShell process so the report cannot contain command arguments.
+    ports = sorted({1766, 1767} | ({descriptor_port} if descriptor_port else set()))
+    script = r"""
+$scan = @{processesAvailable=$false; portsAvailable=$false; helpers=@(); listeners=@()}
+try {
+    $scan.helpers = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction Stop |
+        Where-Object {
+            $_.ExecutablePath -match '[\\/]prefab_editor[\\/]runtime[\\/]node\.exe$' -and
+            $_.CommandLine -match '[\\/]prefab_editor[\\/]bridge\.js(?:"|\s|$)'
+        } | Select-Object ProcessId,ParentProcessId)
+    $scan.processesAvailable = $true
+} catch {}
+try {
+    $scan.listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop |
+        Where-Object { $_.LocalPort -in @(__PORTS__) } |
+        Select-Object LocalPort,OwningProcess -Unique)
+    $scan.portsAvailable = $true
+} catch {}
+$scan | ConvertTo-Json -Compress
+""".replace('__PORTS__', ','.join(str(port) for port in ports))
+    powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    try:
+        result = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-Command', script],
+                                capture_output=True, encoding='utf-8', errors='replace', timeout=10,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), check=True)
+        scan = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return '\n\n'.join(lines + ['Windows process and port checks were unavailable. Try again or check Task Manager.'])
+    helpers = {row['ProcessId']: row['ParentProcessId'] for row in scan['helpers']}
+    if helper_pid is None and scan['processesAvailable']:
+        # The current helper can start while Windows is taking the snapshot.
+        helper_pid = next((pid for pid, parent in sorted(helpers.items()) if parent == os.getpid()), None)
+        if helper_pid:
+            lines[-1] = 'Helper started by this launcher (PID {}).'.format(helper_pid)
+    if scan['processesAvailable']:
+        extra = sorted(pid for pid in helpers if pid != helper_pid)
+        if extra:
+            for pid in extra:
+                lines.append('Another Prefabulator helper is running (PID {}, launcher PID {}).'.format(pid, helpers[pid]))
+            lines.append('Close the other Client launcher if it is using the same game, then retry your connection.')
+        else:
+            lines.append('No other matching Prefabulator helper found.')
+    else:
+        lines.append('Windows process details were unavailable. Check Task Manager if you suspect a second launcher.')
+    if scan['portsAvailable']:
+        for row in sorted(scan['listeners'], key=lambda entry: (entry['LocalPort'], entry['OwningProcess'])):
+            port, pid = row['LocalPort'], row['OwningProcess']
+            owner = ('this launcher’s helper' if pid == helper_pid else
+                     'another Prefabulator helper' if pid in helpers else 'unidentified process')
+            lines.append('Local port {} is listening (PID {}, {}).'.format(port, pid, owner))
+        if not scan['listeners']:
+            lines.append('No listeners found on the checked editor ports.')
+        if descriptor_port and not any(row['LocalPort'] == descriptor_port for row in scan['listeners']):
+            lines.append('The game connection file points to a port with no listener. Reconnect Prefabulator.')
+    else:
+        lines.append('Windows listener details were unavailable.')
+    return '\n\n'.join(lines)
 
 
 class SessionTransport:
@@ -229,7 +328,7 @@ class Bridge:
             # Drain stderr so a child error cannot fill its pipe and hang shutdown.
             threading.Thread(target=lambda: self.process.stderr.read(), daemon=True).start()
             if not ready.wait(20) or not result.get('info'):
-                raise RuntimeError('Local editor helper could not start. Stop any standalone editor/workbench and try again.')
+                raise RuntimeError('Local editor helper could not start. Open Connection diagnostics to check for another helper or an occupied port.')
             info = result['info']
             self.url = info['panelUrl']
             with self.lifecycle:
