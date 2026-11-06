@@ -12,7 +12,8 @@ ENV/
 .env.*
 .vs
 
-addons/
+addons/*
+!addons/prefab_editor/
 
 # Distribution / packaging
 build/
@@ -53,3 +54,12 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Prefabulator downloaded runtime files.
+addons/prefab_editor/runtime/
+addons/prefab_editor/payload/
+addons/prefab_editor/panel/
+addons/prefab_editor/workbench/
+addons/prefab_editor/data/
+addons/prefab_editor/.runtime-version
+addons/prefab_editor/prefabulator-*/

@@ -1,0 +1,109 @@
+PREFABULATOR - TAVERN LAUNCHER 1.8.5 ADD-ON
+
+Enable Prefabulator in the client launcher Addons window and restart the launcher.
+Choose your server in the CLIENT launcher, then open Prefabulator. It uses that
+address automatically. Enter the owner console token, or paste your personal
+moderator code. A code also selects its server in the launcher. Saving
+access is optional and encrypted for your Windows account; it enables auto-connect
+when launching that server. All editing happens IN GAME with F1.
+
+CHOOSE YOUR INSTALLATION
+- Separate server and player game folders: leave the shared-folder box UNCHECKED.
+  Close the player game and click Install / update player mod. The server owner
+  separately installs PrefabEditorCore.dll from the Server-Mod-Only release.
+- Server and player use ONE game / Mods folder: tick the shared-folder box for
+  that game folder. Stop BOTH processes before installing. The button installs
+  both DLLs together. This choice is remembered only for that game folder.
+  For a fresh shared setup, first copy Mods from the All-in-One-Shared-Mods ZIP
+  into the shared game folder so the server can start with its core installed.
+
+A source-only add-on downloads the pinned 1.0.23 runtime on first use and verifies
+SHA-256. The player download is about 144 MiB; all-in-one is about 205 MiB. Downloads
+extract runtime/payload files only. The full release ZIPs support offline setup.
+
+Start the server, connect Prefabulator, wait for CONNECTED, then launch/join the
+player game and press F1. Keep Tavern Launcher and Prefabulator open; minimize them
+if needed. If you change servers, click Change server / reconnect before joining.
+The window shows both addresses if they differ. Blank means this computer
+(127.0.0.1). After changing connections or updating, restart the player game.
+
+UPDATING
+Separate setup: stop the player game to update player files; stop the server to
+replace its core DLL. Shared setup: stop BOTH before replacing shared files.
+Keep existing UserData, server keys, admin-access.json and teleporter-links.json.
+No teleporter relinking is required. Player mod 2.3.8 and core 1.6.7 are included.
+
+PERSONAL ADMIN ACCESS
+Owner: connect with your owner console token and use Manage Admin Access to create
+named moderator codes, choose allowed tabs, change permissions or revoke access.
+Give each moderator their own code. The server enforces permissions and revocation.
+Anyone holding the owner console token has full console access; one holder cannot
+be revoked individually while they still know that shared token. Keep it private.
+
+Release/download choices:
+https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.23
+Mod source:
+https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.23
+
+CONNECTION TROUBLE
+Use the same server address in Prefabulator and Join Server. A changed address
+now explains why the editor disconnected. Retry editor connection repairs a
+missing descriptor for a live helper. The connected view displays its file path
+and local URL. After connecting, restart the player game if already open.
+
+MISSING BUTTON: Version 1.0.16 removes a uuid import unavailable in the shipped
+client launcher. Close the client launcher, replace this add-on folder and
+reopen it. No Python installation is needed for the add-on load fix.
+
+LOCAL CONSOLE ON YOUR PLAYING COMPUTER
+If you host this server on the computer you play on, but join through a public
+or LAN address, keep that working game address in the main launcher. Open
+Prefabulator and tick "I run this server on THIS computer" before entering the
+owner token. The console uses 127.0.0.1 and stays paired with that game address.
+Optional: Save my access token remembers this pairing for future launches.
+Changing game servers clears the local-console choice and credential. Other
+admins on other computers should leave this option unticked.
+
+CONSOLE TAB - REQUIRES PLAYER 2.3.7 AND SERVER CORE 1.6.6
+Update BOTH mods before using Console; restart the game server after its update.
+In game, press F1, open Console, enter one command, and click Run command. The
+reply appears below. Use Paste command, Previous/Next command, Copy output and
+Clear output as needed. Commands are sent once; check the result before retrying
+if the connection fails. History is kept only until the game closes.
+Owner: Manage Admin Access > select the moderator > tick Console > Save permissions.
+Existing moderator codes stay valid, but Console is OFF until you enable it.
+Console allows unrestricted server commands. Enable it separately from Select all
+tools. Only the owner can manage access profiles. Give Console only to admins you trust with full
+server command access.
+
+UPDATE 1.0.21
+Update the player mod to 2.3.8 after replacing the add-on; replacing the add-on
+alone does not update the in-game editor. Keep server core 1.6.6. Shared Mods
+users must stop BOTH processes before replacing files.
+
+PREFABS AND STRINGS
+Build now has Prefabs and Strings sections. The old JSON import is called Prefabs;
+your existing saved prefab files still work.
+To spawn a local item string: press F1 > Build > Strings > Browse string file or
+Browse string folder. Choose the folder containing your .txt files. Search by
+name, select a variant, then click Spawn selected string. It appears 3 m in front
+of the editor camera. You can also use Read strings from clipboard.
+Files with several labeled strings show separate choices. Instruction-only files
+are skipped. Generator code is ignored and file warnings are shown before spawning.
+Each click spawns ONE selected variant. String spawning uses the Build permission.
+
+CONNECTION DIAGNOSTICS AND MODERATOR ACCESS
+Open Connection diagnostics in Prefabulator to check the selected game's DLLs,
+its connection file, running helpers and local ports. Copy report if you need
+help. A shared Mods folder normally contains one player DLL and one server DLL.
+Owners can create and edit moderator profiles in Manage Admin Access. Use the
+permission checkboxes to choose the tools each moderator can use.
+For 1.0.22, close the Client launcher and replace its complete addons/prefab_editor
+folder. Users already on 1.0.21 can keep their installed DLLs.
+
+SERVER UPDATE 1.0.23
+Install PrefabEditorCore.dll 1.6.7 on the server to fix duplicate owner WebSocket
+commands. Stop the server, replace its Mods/PrefabEditorCore.dll, and start it.
+Confirm the server log says PrefabEditorCore 1.6.7 up. Reconnect console sessions.
+Use Server-Mod-Only for an existing separate server. For a shared Mods folder,
+stop both server and player before replacing the server DLL.
