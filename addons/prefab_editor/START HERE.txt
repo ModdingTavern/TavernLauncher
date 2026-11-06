@@ -17,7 +17,7 @@ CHOOSE YOUR INSTALLATION
   For a fresh shared setup, first copy Mods from the All-in-One-Shared-Mods ZIP
   into the shared game folder so the server can start with its core installed.
 
-A source-only add-on downloads the pinned 1.0.22 runtime on first use and verifies
+A source-only add-on downloads the pinned 1.0.23 runtime on first use and verifies
 SHA-256. The player download is about 144 MiB; all-in-one is about 205 MiB. Downloads
 extract runtime/payload files only. The full release ZIPs support offline setup.
 
@@ -31,7 +31,7 @@ UPDATING
 Separate setup: stop the player game to update player files; stop the server to
 replace its core DLL. Shared setup: stop BOTH before replacing shared files.
 Keep existing UserData, server keys, admin-access.json and teleporter-links.json.
-No teleporter relinking is required. Player mod 2.3.8 and core 1.6.6 are included.
+No teleporter relinking is required. Player mod 2.3.8 and core 1.6.7 are included.
 
 PERSONAL ADMIN ACCESS
 Owner: connect with your owner console token and use Manage Admin Access to create
@@ -41,9 +41,9 @@ Anyone holding the owner console token has full console access; one holder canno
 be revoked individually while they still know that shared token. Keep it private.
 
 Release/download choices:
-https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.22
+https://github.com/calebv2/ATT-Prefab-Editor/releases/tag/prefabulator-v1.0.23
 Mod source:
-https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.22
+https://github.com/calebv2/ATT-Prefab-Editor/tree/prefabulator-v1.0.23
 
 CONNECTION TROUBLE
 Use the same server address in Prefabulator and Join Server. A changed address
@@ -100,3 +100,10 @@ Owners can create and edit moderator profiles in Manage Admin Access. Use the
 permission checkboxes to choose the tools each moderator can use.
 For 1.0.22, close the Client launcher and replace its complete addons/prefab_editor
 folder. Users already on 1.0.21 can keep their installed DLLs.
+
+SERVER UPDATE 1.0.23
+Install PrefabEditorCore.dll 1.6.7 on the server to fix duplicate owner WebSocket
+commands. Stop the server, replace its Mods/PrefabEditorCore.dll, and start it.
+Confirm the server log says PrefabEditorCore 1.6.7 up. Reconnect console sessions.
+Use Server-Mod-Only for an existing separate server. For a shared Mods folder,
+stop both server and player before replacing the server DLL.
