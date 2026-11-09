@@ -194,10 +194,11 @@ class TavernKeeperWindow(tk.Toplevel):
         then calls on_result(result_string, result_data) on the Tk thread.
         quiet and max_wait are kept for API compatibility but max_wait
         is used as the capture timeout."""
+        self._append_log(f"> {cmd}\n", "cyan")
         if not self._connected:
+            self._append_log("Not sent: not connected\n", "err")
             self.after(0, lambda: on_result(None, None))
             return
-        self._append_log(f"> {cmd}\n", "cyan")
 
         def worker():
             rs, rd, err = self._ws_client.send_capture(cmd, timeout=max_wait)
