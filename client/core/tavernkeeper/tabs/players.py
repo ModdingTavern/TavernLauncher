@@ -9,7 +9,7 @@ from collections import Counter
 
 from tavern_shared.theme import BG, SURF, SURF2, AMBER, PARCH, MUTED, RED, _section_label
 from client.core.tavernkeeper.widgets import (
-    confirm, form_button, form_combo, form_entry, form_row, form_text, read_number, say, status_line,
+    confirm, entity_name, form_button, form_combo, form_entry, form_row, form_text, read_number, say, status_line,
 )
 
 # SpawnAreaIdentifier values that work on the stock map. The others throw or are dev-only.
@@ -31,7 +31,7 @@ def _number(value):
 
 
 def _item_name(item):
-    return re.sub(r"^\d+ - |\(Clone\)$", "", str(item.get("Name", "?")))
+    return entity_name(item.get("Name", "?"))
 
 
 def _describe_inventory(row):

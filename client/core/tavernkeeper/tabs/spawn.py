@@ -1,4 +1,4 @@
-"""The Spawn tab.
+"""The Spawn section of the Build tab, and the prefab picker.
 
 Methods of TavernKeeperWindow, which inherits this mixin.
 """
@@ -9,59 +9,104 @@ import tkinter as tk
 from tkinter import messagebox
 
 from tavern_shared.theme import (
-    BG, SURF, BORDER, AMBER, AMBERDIM, PARCH, MUTED, _btn, _field, _section_label,
-    _mk_scrollbar,
+    BG, SURF, BORDER, AMBER, AMBERDIM, PARCH, MUTED, RED, _btn, _section_label, _mk_scrollbar,
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon
 from tavern_shared.paths import _tavern_data_dir
+from client.core.tavernkeeper.widgets import (
+    form_button, form_entry, form_row, form_text, parse_vector, read_number, say, status_line,
+)
+
+MAX_SPAWN_COUNT = 50
 
 
 class SpawnTabMixin:
-    # ── Spawn tab ────────────────────────────────────────────────────────────
+    # ── Spawn section ────────────────────────────────────────────────────────
 
-    def _build_spawn_tab(self, parent):
-        tk.Label(parent, text="Spawns a prefab at the target player's location.",
-                 bg=BG, fg=MUTED, font=("Segoe UI",9), wraplength=680, justify="left"
-        ).pack(anchor="w", padx=8, pady=(10,6))
-
-        _section_label(parent, "PREFAB")
-        pf = _field(parent)
+    def _build_spawn_section(self, parent):
+        _section_label(parent, "SPAWN")
+        row = form_row(parent)
+        form_text(row, "Prefab:")
         self.v_spawn_prefab = tk.StringVar()
-        row = tk.Frame(pf, bg=SURF)
-        row.pack(fill="x")
-        spawn_prefab_entry = tk.Entry(row, textvariable=self.v_spawn_prefab, bg=SURF, fg=PARCH,
-                 insertbackground=AMBER, relief="flat", font=("Consolas",10),
-                 bd=6)
-        spawn_prefab_entry.pack(side="left", fill="x", expand=True)
-        self._bind_prefab_autocomplete(spawn_prefab_entry, self.v_spawn_prefab)
-        _btn(parent, "Browse Prefabs…", lambda: self._open_prefab_picker(self.v_spawn_prefab), "primary",
-             font=("Segoe UI",9,"bold"), pady=6).pack(fill="x", padx=8, pady=(4,10))
+        entry = form_entry(row, self.v_spawn_prefab, 24)
+        entry.pack_configure(fill="x", expand=True)
+        self._bind_prefab_autocomplete(entry, self.v_spawn_prefab)
+        form_button(row, "Browse Prefabs…", lambda: self._open_prefab_picker(self.v_spawn_prefab), "primary")
 
-        _section_label(parent, "ARGUMENTS  (optional)")
-        af = _field(parent)
+        row = form_row(parent)
+        form_text(row, "Arguments:")
         self.v_spawn_args = tk.StringVar()
-        tk.Entry(af, textvariable=self.v_spawn_args, bg=SURF, fg=PARCH,
-                 insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
+        form_entry(row, self.v_spawn_args, 16).pack_configure(fill="x", expand=True)
+        form_text(row, "Count:")
+        self.v_spawn_count = tk.StringVar(value="1")
+        form_entry(row, self.v_spawn_count, 4)
+        form_button(row, "Spawn at Target Player", self._on_spawn, "primary")
 
-        _btn(parent, "Spawn at Target Player", self._on_spawn, "primary",
-             font=("Georgia",10,"bold"), pady=10).pack(fill="x", padx=8, pady=(8,8))
+        row = form_row(parent)
+        form_text(row, "Exact:")
+        self.v_spawn_position = tk.StringVar()
+        form_entry(row, self.v_spawn_position, 22)
+        form_button(row, "Target's Position", self._on_use_target_position)
+        form_text(row, "Rotation:")
+        self.v_spawn_rotation = tk.StringVar(value="0,0,0")
+        form_entry(row, self.v_spawn_rotation, 9)
+        form_button(row, "Spawn Exact", self._on_spawn_exact, "primary")
+        self._say_spawn = status_line(parent)
+
+    def _spawn_prefab(self):
+        prefab = self.v_spawn_prefab.get().strip()
+        if not prefab:
+            say(self._say_spawn, "Pick or type a prefab first.", RED)
+        return prefab
 
     def _on_spawn(self):
+        label = self._say_spawn
+        target = self._current_target()
+        prefab = self._spawn_prefab() if target else None
+        if not prefab:
+            return
+        count = read_number(self.v_spawn_count, label, "the count", int)
+        if count is None:
+            return
+        if not 1 <= count <= MAX_SPAWN_COUNT:
+            say(label, f"The count has to be from 1 to {MAX_SPAWN_COUNT}.", RED)
+            return
+        args = self.v_spawn_args.get().strip()
+        cmd = f"spawn {self._q_target(target)} {self._q(prefab)}" + (f" {args}" if args else "")
+        self._send_series([cmd] * count, label, f"Spawned {count} at {target}.", target=target)
+
+    def _on_use_target_position(self):
+        label = self._say_spawn
         target = self._current_target()
         if not target:
             return
-        prefab = self.v_spawn_prefab.get().strip()
+
+        def got(result):
+            position = result.value.get("Position") if result.ok and isinstance(result.value, dict) else None
+            if position is None:
+                self._answer_on(label, "Couldn't read where they are.", color=RED)(result)
+            else:
+                self.v_spawn_position.set(",".join(f"{v:.3f}" for v in position))
+                say(label, "")
+        self._run_command(f"player detailed {self._q_target(target)}", got, quiet=True)
+
+    def _on_spawn_exact(self):
+        label = self._say_spawn
+        prefab = self._spawn_prefab()
         if not prefab:
-            messagebox.showinfo("Enter a prefab", "Pick or type a prefab first.", parent=self)
+            return
+        position = parse_vector(self.v_spawn_position.get())
+        rotation = parse_vector(self.v_spawn_rotation.get())
+        if position is None or rotation is None:
+            say(label, "Position and rotation need three numbers, like 10,20,30.", RED)
             return
         args = self.v_spawn_args.get().strip()
-        cmd = f"spawn {self._q_target(target)} {self._q(prefab)}"
-        if args:
-            cmd += f" {args}"
-        self._send(cmd)
+        cmd = f"spawn exact {position} {rotation} {self._q(prefab)}" + (f" {args}" if args else "")
+        self._send_and_say(cmd, label, f"Spawned at {position}.")
 
     def _prefabs_cache_path(self):
-        return os.path.join(_tavern_data_dir(), "prefabs.json")
+        host = re.sub(r"[^\w.-]", "_", self.v_host.get().strip() or "127.0.0.1")
+        return os.path.join(_tavern_data_dir(), f"prefabs-{host}.json")
 
     def _load_prefabs_cache(self):
         try:

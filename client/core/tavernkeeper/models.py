@@ -44,6 +44,18 @@ class Selection:
         self.groups = {}
         self.group = None
         self.history = []
+        self.current = None
+
+    def forget(self, ids):
+        """Drops destroyed objects from everything that lists them."""
+        gone = set(ids)
+        self.nearby = [e for e in self.nearby if e[0] not in gone]
+        self.checked -= gone
+        self.history = [e for e in self.history if e[0] not in gone]
+        for name in list(self.groups):
+            self.groups[name] = [e for e in self.groups[name] if e[0] not in gone]
+        if self.current and self.current[0] in gone:
+            self.current = None
 
     def active_ids(self):
         """The ids to act on: the chosen group, else the ticked rows, else

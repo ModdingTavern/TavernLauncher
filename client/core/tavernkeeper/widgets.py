@@ -28,6 +28,20 @@ def error_text(error):
     return text
 
 
+def entity_name(text):
+    """A game object's display name, without its id prefix and (Clone)."""
+    return re.sub(r"^\d+ - |\(Clone\)$", "", str(text))
+
+
+def parse_vector(text):
+    """x,y,z with no spaces, the only shape the console takes, or None."""
+    parts = re.sub(r"\s", "", text).split(",")
+    try:
+        return ",".join(parts) if len(parts) == 3 and all(float(p) is not None for p in parts) else None
+    except ValueError:
+        return None
+
+
 def form_row(parent):
     row = tk.Frame(parent, bg=BG)
     row.pack(fill="x", padx=20, pady=(0, 4))

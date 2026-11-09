@@ -201,6 +201,18 @@ class ConnectionMixin:
         say(label, "Sending...")
         self._run_command(cmd, self._answer_on(label, done, then, color), output=False)
 
+    def _send_series(self, commands, label, done, then=None, target=None):
+        """Sends commands one after another, stopping at the first failure."""
+        commands = list(commands)
+
+        def send(i):
+            if i == len(commands) - 1:
+                self._send_and_say(commands[i], label, done, then, target)
+            else:
+                self._send_and_say(commands[i], label, f"{i + 1} of {len(commands)}...",
+                                   lambda: self.after(100, lambda: send(i + 1)))
+        send(0)
+
     @staticmethod
     def _q_text(text):
         """Free text as one console argument. Quotes and backslashes would end it early."""

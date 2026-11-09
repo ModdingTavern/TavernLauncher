@@ -101,9 +101,12 @@ class TavernKeeperApi:
 
     @property
     def selection(self):
-        """Entity ids in the chosen group or ticked in Find & Select. Empty
-        means commands act on whatever the server has selected."""
-        return list(self._w._active_entity_ids() or [])
+        """Entity ids the Build tab is working on: its chosen group, else the
+        ticked rows, else the one object selected. Empty if there is none."""
+        selection = self._w.models.selection
+        if selection.active_ids():
+            return list(selection.active_ids())
+        return [selection.current[0]] if selection.current else []
 
     # Events
 

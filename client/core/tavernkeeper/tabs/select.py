@@ -1,4 +1,4 @@
-"""The Find & Select tab.
+"""The Find section of the Build tab.
 
 Methods of TavernKeeperWindow, which inherits this mixin.
 """
@@ -6,19 +6,20 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from tavern_shared.theme import (
-    BG, SURF, SURF2, BORDER, AMBER, AMBERDIM, PARCH, MUTED, _btn, _field, _section_label,
+    BG, SURF, SURF2, BORDER, AMBER, AMBERDIM, PARCH, MUTED, RED, _btn, _section_label,
     _mk_scrollbar, _fix_combobox_popdown_colors,
 )
 from tavern_shared.screen_fit import bind_wheel, wheel_step
-from client.core.tavernkeeper.widgets import confirm
+from client.core.tavernkeeper.widgets import confirm, entity_name, say
 
 
 class SelectTabMixin:
-    # ── Find & Select tab ───────────────────────────────────────────────────
+    # ── Find section ─────────────────────────────────────────────────────────
 
-    def _build_select_tab(self, parent):
+    def _build_find_section(self, parent):
+        _section_label(parent, "FIND")
         top = tk.Frame(parent, bg=BG)
-        top.pack(fill="x", padx=8, pady=(10,6))
+        top.pack(fill="x", padx=8, pady=(0,6))
         tk.Label(top, text="Diameter:", bg=BG, fg=PARCH,
                  font=("Segoe UI",9)).pack(side="left")
         self.v_radius = tk.StringVar(value="10")
@@ -27,12 +28,9 @@ class SelectTabMixin:
                  bd=4, width=6).pack(side="left", padx=(6,10))
         _btn(top, "🔍 Find Nearby", self._on_find_nearby, "primary",
              font=("Segoe UI",9,"bold"), pady=6, padx=12).pack(side="left")
-        tk.Label(top, text="around the target player",
-                 bg=BG, fg=MUTED, font=("Segoe UI",8)).pack(side="left", padx=(8,0))
 
-        # Groups row
         gf = tk.Frame(parent, bg=BG)
-        gf.pack(fill="x", padx=8, pady=(0,6))
+        gf.pack(fill="x", padx=8, pady=(0,4))
         tk.Label(gf, text="Group:", bg=BG, fg=PARCH,
                  font=("Segoe UI",9)).pack(side="left")
         self._group_combo_var = tk.StringVar(value="(none)")
@@ -46,35 +44,28 @@ class SelectTabMixin:
                   selectbackground=[("readonly",SURF)],
                   selectforeground=[("readonly",PARCH)])
         self._group_combo = ttk.Combobox(gf, textvariable=self._group_combo_var,
-                                          font=("Consolas",9), width=18, state="readonly",
+                                          font=("Consolas",9), width=14, state="readonly",
                                           style="Tavk.Group.TCombobox")
         self._group_combo["values"] = ["(none)"]
         self._group_combo.pack(side="left", padx=(4,6))
         self._group_combo.bind("<<ComboboxSelected>>", self._on_group_select)
         _fix_combobox_popdown_colors(self._group_combo, SURF, PARCH, AMBERDIM, "#ffd080")
         _btn(gf, "✕ Delete Group", self._on_group_delete,
-             font=("Segoe UI",8), pady=3, padx=6).pack(side="left", padx=(0,12))
+             font=("Segoe UI",8), pady=3, padx=6).pack(side="left")
+        gs = tk.Frame(parent, bg=BG)
+        gs.pack(fill="x", padx=8, pady=(0,6))
         self.v_group_name = tk.StringVar()
-        tk.Entry(gf, textvariable=self.v_group_name, bg=SURF, fg=PARCH,
+        tk.Entry(gs, textvariable=self.v_group_name, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",9),
                  bd=4, width=14).pack(side="left", padx=(0,4))
-        _btn(gf, "Save Checked as Group", self._on_group_save, "primary",
+        _btn(gs, "Save Checked as Group", self._on_group_save, "primary",
              font=("Segoe UI",8,"bold"), pady=3, padx=6).pack(side="left")
 
-        # Two-column container: nearby list (left) + selection history (right)
-        cols = tk.Frame(parent, bg=BG)
-        cols.pack(fill="both", expand=True, padx=8, pady=(0,6))
-        cols.columnconfigure(0, weight=3)
-        cols.columnconfigure(1, weight=2)
-
-        # ── Left: Nearby list ─────────────────────────────────────────────
-        left = tk.Frame(cols, bg=BG)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0,4))
-        tk.Label(left, text="NEARBY  (✓ = group)", bg=BG, fg=AMBERDIM,
-                 font=("Segoe UI",7,"bold")).pack(anchor="w", pady=(0,2))
-        lb = tk.Frame(left, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
-        lb.pack(fill="both", expand=True)
-        self._nearby_canvas = tk.Canvas(lb, bg=SURF, highlightthickness=0, height=200)
+        tk.Label(parent, text="NEARBY  (✓ = group)", bg=BG, fg=AMBERDIM,
+                 font=("Segoe UI",7,"bold")).pack(anchor="w", padx=8, pady=(0,2))
+        lb = tk.Frame(parent, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        lb.pack(fill="both", expand=True, padx=8, pady=(0,6))
+        self._nearby_canvas = tk.Canvas(lb, bg=SURF, highlightthickness=0, height=200, width=200)
         sb2 = _mk_scrollbar(lb, self._nearby_canvas.yview)
         sb2.pack(side="right", fill="y")
         self._nearby_canvas.config(yscrollcommand=sb2.set)
@@ -96,17 +87,19 @@ class SelectTabMixin:
         bind_wheel(self._nearby_inner, _nearby_mousewheel)
         self._nearby_mousewheel = _nearby_mousewheel
 
-        # ── Right: Selection history ──────────────────────────────────────
-        right = tk.Frame(cols, bg=BG)
-        right.grid(row=0, column=1, sticky="nsew", padx=(4,0))
-        tk.Label(right, text="SELECTION HISTORY", bg=BG, fg=AMBERDIM,
-                 font=("Segoe UI",7,"bold")).pack(anchor="w", pady=(0,2))
-        hf = tk.Frame(right, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
-        hf.pack(fill="both", expand=True)
+        head = tk.Frame(parent, bg=BG)
+        head.pack(fill="x", padx=8, pady=(0,2))
+        tk.Label(head, text="SELECTION HISTORY", bg=BG, fg=AMBERDIM,
+                 font=("Segoe UI",7,"bold")).pack(side="left")
+        _btn(head, "Clear", self._on_history_clear,
+             font=("Segoe UI",7), pady=1, padx=6).pack(side="right")
+        hf = tk.Frame(parent, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        hf.pack(fill="x", padx=8, pady=(0,6))
         self._history_listbox = tk.Listbox(hf, bg=SURF, fg=PARCH,
                                             selectbackground=AMBERDIM,
                                             selectforeground="#ffd080",
-                                            relief="flat", bd=0,
+                                            relief="flat", bd=0, height=4,
+                                            highlightthickness=0,
                                             font=("Consolas",8),
                                             activestyle="none")
         hsb = _mk_scrollbar(hf, self._history_listbox.yview)
@@ -115,40 +108,24 @@ class SelectTabMixin:
         self._history_listbox.pack(side="left", fill="both", expand=True, padx=2, pady=2)
         # Click history entry to re-select that entity
         self._history_listbox.bind("<<ListboxSelect>>", self._on_history_select)
-        _btn(right, "Clear", self._on_history_clear,
-             font=("Segoe UI",7), pady=2, padx=6).pack(anchor="e", pady=(2,0))
 
         self._nearby_vars = {}
         self._nearby_listbox = None
 
-        _section_label(parent, "SELECT BY PREFAB  (nearest to target player)")
-        spf = _field(parent)
+        tk.Label(parent, text="NEAREST BY PREFAB", bg=BG, fg=AMBERDIM,
+                 font=("Segoe UI",7,"bold")).pack(anchor="w", padx=8, pady=(0,2))
+        spf = tk.Frame(parent, bg=BG)
+        spf.pack(fill="x", padx=8, pady=(0,8))
         self.v_select_prefab = tk.StringVar()
-        row_sp = tk.Frame(spf, bg=SURF)
-        row_sp.pack(fill="x")
-        select_prefab_entry = tk.Entry(row_sp, textvariable=self.v_select_prefab, bg=SURF, fg=PARCH,
+        select_prefab_entry = tk.Entry(spf, textvariable=self.v_select_prefab, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10),
-                 bd=6)
-        select_prefab_entry.pack(side="left", fill="x", expand=True)
+                 bd=4, width=12)
+        select_prefab_entry.pack(side="left", fill="x", expand=True, padx=(0,4))
         self._bind_prefab_autocomplete(select_prefab_entry, self.v_select_prefab)
-        _btn(parent, "Browse Prefabs…", lambda: self._open_prefab_picker(self.v_select_prefab), "primary",
-             font=("Segoe UI",9,"bold"), pady=6).pack(fill="x", padx=8, pady=(4,4))
-        _btn(parent, "Select Nearest", self._on_select_prefab, "primary",
-             font=("Segoe UI",9,"bold"), pady=6).pack(fill="x", padx=8, pady=(0,10))
-
-        _section_label(parent, "CURRENT SELECTION")
-        row = tk.Frame(parent, bg=BG)
-        row.pack(fill="x", padx=8, pady=(0,12))
-        _btn(row, "Get String", self._on_get_string,
-             font=("Segoe UI",9), pady=7, padx=12).pack(side="left")
-        _btn(row, "Snap to Ground", lambda: self._send("select snap-ground"),
-             font=("Segoe UI",9), pady=7, padx=12).pack(side="left", padx=6)
-        _btn(row, "Look At Target", self._on_look_at,
-             font=("Segoe UI",9), pady=7, padx=12).pack(side="left", padx=(0,6))
-        _btn(row, "Unselect", lambda: self._send("select unselect"),
-             font=("Segoe UI",9), pady=7, padx=12).pack(side="left")
-        _btn(row, "✕ Destroy", self._on_destroy_selection, "danger",
-             font=("Segoe UI",9,"bold"), pady=7, padx=12).pack(side="right")
+        _btn(spf, "Browse Prefabs…", lambda: self._open_prefab_picker(self.v_select_prefab),
+             font=("Segoe UI",8), pady=4, padx=6).pack(side="left", padx=(0,4))
+        _btn(spf, "Select Nearest", self._on_select_prefab, "primary",
+             font=("Segoe UI",8,"bold"), pady=4, padx=6).pack(side="left")
 
     def _populate_nearby(self, items):
         """Rebuild the checkbox list from items = [(id, name), ...]."""
@@ -208,6 +185,7 @@ class SelectTabMixin:
                     except Exception: pass
                 self._send(f"select {eid}")
                 self._add_to_history(eid, name)
+                self._read_selected()
             lbl.bind("<Button-1>", on_click)
             # Mousewheel on each row and its children
             mwh = getattr(self, "_nearby_mousewheel", None)
@@ -297,12 +275,29 @@ class SelectTabMixin:
         self._append_log(f"[Group '{name}' deleted]\n", "warn")
 
     def _on_destroy_selection(self):
-        if not confirm(self, "Destroy selection",
-                       "Destroy whatever is selected on the server? This can't be undone."):
+        label = self._say_selected
+        selection = self.models.selection
+        ids = selection.active_ids() or ([selection.current[0]] if selection.current else [])
+        if not ids:
+            say(label, "Select something first.", RED)
             return
-        self._send("select destroy")
-        # Refresh nearby list so the destroyed object disappears
-        self.after(400, self._on_find_nearby)
+        if len(ids) > 1:
+            what = f"these {len(ids)} objects"
+        elif selection.current and selection.current[0] == ids[0]:
+            what = f"{entity_name(selection.current[1])} ({ids[0]})"
+        else:
+            what = f"object {ids[0]}"
+        if not confirm(self, "Destroy", f"Destroy {what}? This can't be undone."):
+            return
+
+        def done():
+            selection.forget(ids)
+            self._populate_nearby(selection.nearby)
+            self._history_listbox.delete(0, "end")
+            for eid, name in selection.history:
+                self._history_listbox.insert("end", f"{str(eid):<10} {name}")
+            self._read_selected()
+        self._send_series([f"wacky destroy {eid}" for eid in ids], label, "Destroyed.", then=done)
 
     def _add_to_history(self, eid, name):
         entry = f"{str(eid):<10} {name}"
@@ -328,6 +323,7 @@ class SelectTabMixin:
             eid, name = history[idx]
             self._uncheck_all_nearby()
             self._send(f"select {eid}")
+            self._read_selected()
 
     def _on_history_clear(self):
         self.models.selection.history.clear()
@@ -342,6 +338,7 @@ class SelectTabMixin:
             messagebox.showinfo("Pick a prefab", "Browse for a prefab first.", parent=self)
             return
         self._send(f"select prefab {prefab} {self._q_target(target)}")
+        self._read_selected()
 
     def _on_get_string(self):
         def on_result(rs, rd):
@@ -354,3 +351,4 @@ class SelectTabMixin:
         if not target:
             return
         self._send(f"select look-at {self._q_target(target)}")
+        self._read_selected()

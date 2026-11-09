@@ -1,7 +1,7 @@
 """
 TavernKeeper: native prefab spawn/select/move/settings/admin tool, run on
-a remote-console connection. Core tabs (Spawn, Find & Select, Move &
-Rotate, World, Server, Save & Load, Players) live in tabs/, as
+a remote-console connection. Core tabs (Players, World, Build, Server,
+Save & Load) live in tabs/, as
 mixins of the window below; anything else -- e.g. the Macros tab -- comes from an addon
 registering itself through client.core.tavernkeeper.registry, and is
 inserted at the position it asks for without this file needing to know
@@ -26,6 +26,7 @@ from client.core.tavernkeeper.widgets import TabBar, error_card
 from client.core.tavernkeeper.connection import ConnectionMixin
 from client.core.tavernkeeper.console_drawer import ConsoleDrawerMixin
 from client.core.tavernkeeper.roster import RosterMixin
+from client.core.tavernkeeper.tabs.build import BuildTabMixin
 from client.core.tavernkeeper.tabs.spawn import SpawnTabMixin
 from client.core.tavernkeeper.tabs.select import SelectTabMixin
 from client.core.tavernkeeper.tabs.move import MoveTabMixin
@@ -42,6 +43,7 @@ class TavernKeeperWindow(
     ConnectionMixin,
     ConsoleDrawerMixin,
     RosterMixin,
+    BuildTabMixin,
     SpawnTabMixin,
     SelectTabMixin,
     MoveTabMixin,
@@ -300,10 +302,8 @@ class TavernKeeperWindow(
         self.destroy()
 
 
-register_tab("spawn", "Spawn", lambda parent, window: window._build_spawn_tab(parent), built_in=True)
-register_tab("select", "Find & Select", lambda parent, window: window._build_select_tab(parent), built_in=True)
-register_tab("move", "Move & Rotate", lambda parent, window: window._build_move_tab(parent), built_in=True)
+register_tab("admin", "Players", lambda parent, window: window._build_players_tab(parent), built_in=True)
 register_tab("world", "World", lambda parent, window: window._build_world_tab(parent), built_in=True)
+register_tab("spawn", "Build", lambda parent, window: window._build_build_tab(parent), built_in=True)
 register_tab("settings", "Server", lambda parent, window: window._build_server_tab(parent), built_in=True)
 register_tab("saveload", "Save & Load", lambda parent, window: window._build_saveload_tab(parent), built_in=True)
-register_tab("admin", "Players", lambda parent, window: window._build_players_tab(parent), built_in=True)
