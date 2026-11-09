@@ -79,12 +79,12 @@ class SpawnTabMixin:
             pass  # a failed cache write isn't worth interrupting anything over
 
     def _open_prefab_picker(self, target_var):
-        if self._prefab_list is not None:
+        if self.models.prefabs is not None:
             self._show_prefab_picker(target_var)
             return
         cached = self._load_prefabs_cache()
         if cached:
-            self._prefab_list = cached
+            self.models.prefabs = cached
             self._show_prefab_picker(target_var)
             return
         self._fetch_prefab_list(target_var)
@@ -109,8 +109,8 @@ class SpawnTabMixin:
                 messagebox.showinfo("No prefabs found",
                     "The server didn't return a prefab list.", parent=self)
                 return
-            self._prefab_list = prefabs
-            self._save_prefabs_cache(self._prefab_list)
+            self.models.prefabs = prefabs
+            self._save_prefabs_cache(self.models.prefabs)
             self._show_prefab_picker(target_var)
         self._send_and_capture("spawn list", on_result, quiet=1.5, max_wait=60.0)
     def _show_prefab_picker(self, target_var):
@@ -154,15 +154,15 @@ class SpawnTabMixin:
         listbox.config(yscrollcommand=sb.set)
         listbox.pack(side="left", fill="both", expand=True, padx=4, pady=4)
 
-        state = {"filtered": list(self._prefab_list)}
+        state = {"filtered": list(self.models.prefabs)}
 
         def refresh_list(*_):
             query = v_search.get().strip().lower()
             if query:
-                state["filtered"] = [(h,n) for h,n in self._prefab_list
+                state["filtered"] = [(h,n) for h,n in self.models.prefabs
                                       if query in n.lower() or query == str(h)]
             else:
-                state["filtered"] = list(self._prefab_list)
+                state["filtered"] = list(self.models.prefabs)
             listbox.delete(0, "end")
             shown = state["filtered"][:500]
             for h, n in shown:

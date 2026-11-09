@@ -9,6 +9,7 @@ the addon exists.
 """
 import threading
 import tkinter as tk
+import traceback
 from tkinter import ttk, messagebox
 
 from tavern_shared.theme import (
@@ -16,9 +17,12 @@ from tavern_shared.theme import (
     _fix_combobox_popdown_colors,
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon
+from tavern_shared.screen_fit import ScrollArea, fit_window
 from client.core.tavernkeeper.registry import register_tab, ordered_tabs, registry
 from tavern_shared.reorder_dialog import ReorderDialog
 from client.core.tavernkeeper.api import TavernKeeperApi
+from client.core.tavernkeeper.models import Models
+from client.core.tavernkeeper.widgets import TabBar, error_card
 from client.core.tavernkeeper.connection import ConnectionMixin
 from client.core.tavernkeeper.console_drawer import ConsoleDrawerMixin
 from client.core.tavernkeeper.roster import RosterMixin
@@ -28,6 +32,9 @@ from client.core.tavernkeeper.tabs.move import MoveTabMixin
 from client.core.tavernkeeper.tabs.settings import SettingsTabMixin
 from client.core.tavernkeeper.tabs.saveload import SaveLoadTabMixin
 from client.core.tavernkeeper.tabs.admin import AdminTabMixin
+
+OPEN_SIZE = (1060, 900)
+MIN_SIZE = (900, 640)
 
 
 class TavernKeeperWindow(
@@ -65,9 +72,7 @@ class TavernKeeperWindow(
         self._ws_client = None
         self._connected = False
         self._stop = threading.Event()
-        self._prefab_list = None
-        self._save_items = []  # list of (label, spawn_string) staged for Save/Load
-        self._roster = []
+        self.models = Models()
         self.api = TavernKeeperApi(self)
         self._build_connect_form()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -76,8 +81,7 @@ class TavernKeeperWindow(
     # ── Main UI ──────────────────────────────────────────────────────────────
 
     def _build_main_ui(self):
-        self.minsize(1020, 820)
-        self.geometry("1060x900")
+        fit_window(self, *OPEN_SIZE, *MIN_SIZE)
         h = tk.Frame(self, bg=SURF, height=44)
         h.pack(fill="x"); h.pack_propagate(False)
         tk.Label(h, text="🧩  TavernKeeper", bg=SURF, fg=AMBER,
@@ -122,11 +126,7 @@ class TavernKeeperWindow(
 
         style = ttk.Style()
         style.configure("Tavk.TNotebook", background=BG, borderwidth=0)
-        style.configure("Tavk.TNotebook.Tab", background=SURF2, foreground=PARCH,
-                        padding=(12,6), font=("Georgia",9))
-        style.map("Tavk.TNotebook.Tab",
-                  background=[("selected",AMBERDIM)],
-                  foreground=[("selected","#ffd080")])
+        style.layout("Tavk.TNotebook.Tab", [])
 
         self._paned = tk.PanedWindow(self, orient="vertical", bg=BORDER, bd=0, sashwidth=6,
                                      sashrelief="flat", opaqueresize=True)
@@ -195,12 +195,12 @@ class TavernKeeperWindow(
             if not text:
                 hide()
                 return
-            if self._prefab_list is None:
+            if self.models.prefabs is None:
                 cached = self._load_prefabs_cache()
                 if not cached:
                     return  # nothing to suggest from yet, and typing shouldn't trigger a fetch
-                self._prefab_list = cached
-            matches = [(h,n) for h,n in self._prefab_list
+                self.models.prefabs = cached
+            matches = [(h,n) for h,n in self.models.prefabs
                        if text in n.lower() or text == str(h)][:50]
             if matches and not (len(matches) == 1 and str(matches[0][0]) == text):
                 show(matches)
@@ -239,21 +239,36 @@ class TavernKeeperWindow(
         nb = ttk.Notebook(self._tabs_container, style="Tavk.TNotebook")
         nb.pack(fill="both", expand=True)
         self._nb = nb
+        self._tab_bar = TabBar(self._tabs_container, nb)
+        self._tab_bar.frame.pack(fill="x", pady=(0,4), before=nb)
         self._tab_frames = {}
+        self._apply_tab_order()
+
+    def _add_tab(self, tab):
+        area = ScrollArea(self._nb, BG)
+        self._nb.add(area.shell, text=tab["label"])
+        self._tab_bar.add(area.shell, tab["label"])
+        self._tab_frames[tab["key"]] = area.shell
         self.api._begin_build()
         try:
-            for tab in ordered_tabs():
-                frame = tk.Frame(nb, bg=BG)
-                nb.add(frame, text=f"  {tab['label']}  ")
-                self._tab_frames[tab["key"]] = frame
-                tab["build_fn"](frame, self)
-        finally:
+            tab["build_fn"](area.body, self)
+        except Exception as e:
+            self.api._end_build(failed=True)
+            for child in area.body.winfo_children():
+                child.destroy()
+            error_card(area.body, tab["label"], traceback.format_exc())
+            self._append_log(f"[{tab['label']} tab failed to build: {type(e).__name__}: {e}]\n", "err")
+        else:
             self.api._end_build()
 
-    def _rebuild_tabs(self):
-        for child in self._tabs_container.winfo_children():
-            child.destroy()
-        self._build_tabs_notebook()
+    def _apply_tab_order(self):
+        """Puts the tabs in the saved order, building any that aren't yet. A
+        built tab is only moved, so it keeps everything in it."""
+        for index, tab in enumerate(ordered_tabs()):
+            if tab["key"] not in self._tab_frames:
+                self._add_tab(tab)
+            self._nb.insert(index, self._tab_frames[tab["key"]])
+        self._tab_bar.refresh()
 
     def _open_jump_to_tab(self):
         menu = tk.Menu(self, tearoff=0, bg=SURF, fg=PARCH,
@@ -270,7 +285,7 @@ class TavernKeeperWindow(
             menu.grab_release()
 
     def _open_reorder_tabs(self):
-        ReorderDialog(self, registry(), title="Reorder Tabs", on_saved=self._rebuild_tabs)
+        ReorderDialog(self, registry(), title="Reorder Tabs", on_saved=self._apply_tab_order)
 
     def _on_close(self):
         self._stop.set()

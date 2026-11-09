@@ -7,31 +7,15 @@ from tkinter import messagebox
 
 from tavern_shared.theme import (
     BG, SURF, SURF2, BORDER, AMBER, PARCH, MUTED, _btn, _field, _hint, _section_label,
-    _mk_scrollbar,
 )
+from client.core.tavernkeeper.widgets import confirm
 
 
 class AdminTabMixin:
     # ── Player Admin tab ─────────────────────────────────────────────────────
 
     def _build_admin_tab(self, parent):
-        # Outer scrollable canvas so stats list doesn't overflow
-        cf = tk.Frame(parent, bg=BG)
-        cf.pack(fill="both", expand=True)
-        canvas = tk.Canvas(cf, bg=BG, highlightthickness=0)
-        vsb = _mk_scrollbar(cf, canvas.yview)
-        vsb.pack(side="right", fill="y")
-        canvas.config(yscrollcommand=vsb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        inner = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0,0), window=inner, anchor="nw")
-        inner.bind("<Configure>", lambda e: canvas.configure(
-            scrollregion=canvas.bbox("all")))
-
-        def _admin_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind("<MouseWheel>", _admin_mousewheel)
-        inner.bind("<MouseWheel>", _admin_mousewheel)
+        inner = parent
 
         tk.Label(inner, text="Acts on the target player selected above.",
                  bg=BG, fg=MUTED, font=("Segoe UI",9), wraplength=680, justify="left"
@@ -39,7 +23,7 @@ class AdminTabMixin:
 
         row = tk.Frame(inner, bg=BG)
         row.pack(fill="x", padx=8, pady=(0,10))
-        _btn(row, "Kick", self._on_kick, "primary",
+        _btn(row, "Kick", self._on_kick, "danger",
              font=("Segoe UI",9,"bold"), pady=7, padx=16).pack(side="left")
         _btn(row, "Kill", self._on_kill, "danger",
              font=("Segoe UI",9,"bold"), pady=7, padx=16).pack(side="left", padx=6)
@@ -156,13 +140,13 @@ class AdminTabMixin:
 
     def _on_kick(self):
         target = self._current_target()
-        if not target:
+        if not target or not confirm(self, "Kick player", f"Kick {target} from the server?"):
             return
         self._send(f"player kick {self._q_target(target)}")
 
     def _on_kill(self):
         target = self._current_target()
-        if not target:
+        if not target or not confirm(self, "Kill player", f"Kill {target}?"):
             return
         self._send(f"player kill {self._q_target(target)}")
 

@@ -6,7 +6,6 @@ space in a player's name cannot break them.
 """
 import tkinter as tk
 
-from client.core.tavernkeeper.api import Player
 from tavern_shared.theme import BG, SURF, BORDER, AMBERDIM, PARCH, MUTED, _btn, _mk_scrollbar
 
 ROSTER_REFRESH_MS = 10000
@@ -14,7 +13,6 @@ ROSTER_REFRESH_MS = 10000
 
 class RosterMixin:
     def _build_player_sidebar(self, parent):
-        self._roster_info = {}
         self._roster_busy = False
         side = tk.Frame(parent, bg=BG, width=190)
         side.pack_propagate(False)
@@ -60,16 +58,10 @@ class RosterMixin:
         self._roster_busy = False
         if not result.ok or not isinstance(result.value, list):
             return
-        players, info = [], {}
-        for row in result.value:
-            name = row.get("Username") or row.get("username") if isinstance(row, dict) else None
-            if name and str(name) not in info:
-                players.append(Player(row.get("Id", row.get("id")), str(name)))
-                info[str(name)] = row.get("Position")
-        self._roster = players
-        self._roster_info = info
-        self._roster_title.set(f"PLAYERS ({len(players)})")
-        names = [p.name for p in players]
+        roster = self.models.roster
+        roster.update(result.value)
+        self._roster_title.set(f"PLAYERS ({len(roster.players)})")
+        names = [p.name for p in roster.players]
         self._target_combo["values"] = names
         if names != list(self._roster_list.get(0, "end")):
             self._roster_list.delete(0, "end")
@@ -78,7 +70,7 @@ class RosterMixin:
             self.v_target.set(names[0])
         self._sync_roster_selection()
         if not quiet:
-            self._append_log(f"[{len(players)} online]\n", "ok")
+            self._append_log(f"[{len(names)} online]\n", "ok")
 
     def _on_roster_select(self, event=None):
         sel = self._roster_list.curselection()
@@ -97,17 +89,17 @@ class RosterMixin:
     def _describe_target(self, name):
         if not name:
             return ""
-        for player in self._roster:
-            if player.name == name:
-                pos = self._roster_info.get(name)
-                where = ", ".join(str(round(v)) for v in pos) if isinstance(pos, list) else ""
-                return f"#{player.id}\n{where}"
-        return "Not online"
+        player = self.models.roster.find(name)
+        if player is None:
+            return "Not online"
+        pos = self.models.roster.positions.get(name)
+        where = ", ".join(str(round(v)) for v in pos) if isinstance(pos, list) else ""
+        return f"#{player.id}\n{where}"
 
     def _q_target(self, target):
         """A target as a console argument: the player's id when known, else
         the quoted name."""
-        for player in self._roster:
-            if player.name == target and player.id is not None:
-                return str(player.id)
+        player = self.models.roster.find(target)
+        if player is not None and player.id is not None:
+            return str(player.id)
         return self._q(target)

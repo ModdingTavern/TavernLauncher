@@ -162,9 +162,9 @@ class MoveTabMixin:
         priority in _active_entity_ids() over the selection the user just
         made, so Move/Clone/etc. would act on stale entities instead of
         the one just picked."""
-        for eid, name, var in self._nearby_items:
-            if var.get():
-                var.set(False)
+        for var in self._nearby_vars.values():
+            var.set(False)
+        self.models.selection.checked.clear()
         # Row backgrounds reflect checked state -- refresh them all back
         # to normal now that nothing is checked.
         rows = self._nearby_inner.winfo_children()
@@ -181,13 +181,7 @@ class MoveTabMixin:
         2. Any checkboxes are ticked in the nearby list → use those IDs
         3. Neither → return None (act on current single server selection)
         """
-        name = self._group_combo_var.get()
-        if name != "(none)" and name in self._prefab_groups:
-            return [eid for eid, _ in self._prefab_groups[name]]
-        checked = [eid for eid, n, var in self._nearby_items if var.get()]
-        if checked:
-            return checked
-        return None
+        return self.models.selection.active_ids()
 
     def _send_to_selection(self, cmd):
         """Send a command, repeating it for each entity in the active group

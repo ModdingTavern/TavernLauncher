@@ -13,6 +13,7 @@ LOG_MIN_LINES = 4
 SCROLL_STEP = 24
 NEAR_EDGE = 120
 OWN_WHEEL = {"Text", "Listbox", "TCombobox", "Treeview"}
+NESTED_WHEEL = OWN_WHEEL | {"Canvas"}
 
 
 class _MonitorInfo(ctypes.Structure):
@@ -48,12 +49,43 @@ def _work_area(window):
     return 0, 0, window.winfo_screenwidth(), window.winfo_screenheight() - 60, 16, 40
 
 
-class ScreenFit:
-    def __init__(self, window, bg, min_open_width=MIN_OPEN_WIDTH):
-        self.window = window
-        self.min_open_width = min_open_width
-        self.shell = tk.Frame(window, bg=bg)
-        self.shell.pack(fill="both", expand=True)
+def _clamped(window, width, height):
+    left, top, right, bottom, chrome_w, chrome_h = _work_area(window)
+    width = min(width, right - left - chrome_w)
+    height = min(height, bottom - top - chrome_h)
+    x = max(left, min(window.winfo_x(), right - width - chrome_w))
+    y = max(top, min(window.winfo_y(), bottom - height - chrome_h))
+    return x, y, width, height
+
+
+def fit_window(window, width, height, min_width, min_height):
+    """Give an open window this size, or as much of it as its screen has room for,
+    fully on screen."""
+    x, y, width, height = _clamped(window, width, height)
+    window.minsize(min(min_width, width), min(min_height, height))
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
+
+def wheel_step(event):
+    """-1 or 1 from a wheel event, on any platform."""
+    if event.num in (4, 5):
+        return -1 if event.num == 4 else 1
+    return -1 if event.delta > 0 else 1
+
+
+def bind_wheel(widget, handler, add=None):
+    widget.bind("<MouseWheel>", handler, add=add)
+    if widget.tk.call("tk", "windowingsystem") == "x11":
+        widget.bind("<Button-4>", handler, add=add)
+        widget.bind("<Button-5>", handler, add=add)
+
+
+class ScrollArea:
+    """A frame, body, that scrolls both ways when it doesn't fit its space and
+    grows to fill it when it does. Scrollbars show only when needed."""
+
+    def __init__(self, parent, bg):
+        self.shell = tk.Frame(parent, bg=bg)
         self.shell.grid_rowconfigure(0, weight=1)
         self.shell.grid_columnconfigure(0, weight=1)
         self.canvas = tk.Canvas(self.shell, bg=bg, highlightthickness=0, bd=0, width=1, height=1,
@@ -64,15 +96,100 @@ class ScreenFit:
         self.canvas.configure(yscrollcommand=self.vbar.set, xscrollcommand=self.hbar.set)
         self.body = tk.Frame(self.canvas, bg=bg)
         self._item = self.canvas.create_window(0, 0, anchor="nw", window=self.body)
-        self.footer = None
-        self.stretch = None
-        self._fitted = False
         self._pending = False
         self._last = None
         self._show_v = False
         self._show_h = False
+        window = parent.winfo_toplevel()
         window.bind("<Configure>", self._schedule, add="+")
-        window.bind("<MouseWheel>", self._on_wheel, add="+")
+        bind_wheel(window, self._on_wheel, add="+")
+
+    def _need_height(self):
+        return self.body.winfo_reqheight()
+
+    def _schedule(self, event=None):
+        if self._pending:
+            return
+        self._pending = True
+        self.shell.after_idle(self._run_layout)
+
+    def _run_layout(self):
+        self._pending = False
+        try:
+            self._layout(self.shell.winfo_width(), self.shell.winfo_height())
+        except tk.TclError:
+            pass
+
+    def _layout(self, width, height):
+        if width <= 1 or height <= 1:
+            return
+        need_w = self.body.winfo_reqwidth()
+        need_h = self._need_height()
+        bar_w = self.vbar.winfo_reqwidth()
+        bar_h = self.hbar.winfo_reqheight()
+        show_v = need_h > height
+        show_h = need_w > width
+        if show_v and not show_h:
+            show_h = need_w > width - bar_w
+        if show_h and not show_v:
+            show_v = need_h > height - bar_h
+        view_w = width - (bar_w if show_v else 0)
+        view_h = height - (bar_h if show_h else 0)
+        body_w = max(view_w, need_w)
+        body_h = max(view_h, need_h)
+        state = (body_w, body_h, show_v, show_h)
+        if state == self._last:
+            return
+        self._last = state
+        self._set_bar(self.vbar, show_v, self._show_v, row=0, column=1, sticky="ns")
+        self._set_bar(self.hbar, show_h, self._show_h, row=1, column=0, sticky="ew")
+        self._show_v = show_v
+        self._show_h = show_h
+        self.canvas.itemconfigure(self._item, width=body_w, height=body_h)
+        self.canvas.configure(scrollregion=(0, 0, body_w, body_h))
+        if not show_v:
+            self.canvas.yview_moveto(0)
+        if not show_h:
+            self.canvas.xview_moveto(0)
+
+    @staticmethod
+    def _set_bar(bar, show, shown, **grid):
+        if show and not shown:
+            bar.grid(**grid)
+        elif shown and not show:
+            bar.grid_remove()
+
+    def _on_wheel(self, event):
+        widget = event.widget
+        try:
+            if not self.shell.winfo_ismapped():
+                return
+            while widget is not self.body:
+                if widget is None or widget.winfo_class() in NESTED_WHEEL:
+                    return
+                widget = widget.master
+        except (AttributeError, tk.TclError):
+            return
+        self._scroll(event)
+
+    def _scroll(self, event):
+        step = wheel_step(event)
+        if event.state & 1:
+            if self._show_h:
+                self.canvas.xview_scroll(step, "units")
+        elif self._show_v:
+            self.canvas.yview_scroll(step, "units")
+
+
+class ScreenFit(ScrollArea):
+    def __init__(self, window, bg, min_open_width=MIN_OPEN_WIDTH):
+        super().__init__(window, bg)
+        self.shell.pack(fill="both", expand=True)
+        self.window = window
+        self.min_open_width = min_open_width
+        self.footer = None
+        self.stretch = None
+        self._fitted = False
 
     def set_parts(self, footer, stretch):
         self.footer = footer
@@ -128,68 +245,12 @@ class ScreenFit:
         try:
             if not window.winfo_viewable() or window.state() != "normal":
                 return
-            left, top, right, bottom, chrome_w, chrome_h = _work_area(window)
-            width = min(window.winfo_width(), right - left - chrome_w)
-            height = min(window.winfo_height(), bottom - top - chrome_h)
-            x = max(left, min(window.winfo_x(), right - width - chrome_w))
-            y = max(top, min(window.winfo_y(), bottom - height - chrome_h))
+            x, y, width, height = _clamped(window, window.winfo_width(), window.winfo_height())
             if (x, y, width, height) != (window.winfo_x(), window.winfo_y(),
                                          window.winfo_width(), window.winfo_height()):
                 window.geometry(f"{width}x{height}+{x}+{y}")
         except tk.TclError:
             pass
-
-    def _schedule(self, event=None):
-        if self._pending:
-            return
-        self._pending = True
-        self.window.after_idle(self._run_layout)
-
-    def _run_layout(self):
-        self._pending = False
-        try:
-            self._layout(self.shell.winfo_width(), self.shell.winfo_height())
-        except tk.TclError:
-            pass
-
-    def _layout(self, width, height):
-        if width <= 1 or height <= 1:
-            return
-        need_w = self.body.winfo_reqwidth()
-        need_h = self._need_height()
-        bar_w = self.vbar.winfo_reqwidth()
-        bar_h = self.hbar.winfo_reqheight()
-        show_v = need_h > height
-        show_h = need_w > width
-        if show_v and not show_h:
-            show_h = need_w > width - bar_w
-        if show_h and not show_v:
-            show_v = need_h > height - bar_h
-        view_w = width - (bar_w if show_v else 0)
-        view_h = height - (bar_h if show_h else 0)
-        body_w = max(view_w, need_w)
-        body_h = max(view_h, need_h)
-        state = (body_w, body_h, show_v, show_h)
-        if state == self._last:
-            return
-        self._last = state
-        self._set_bar(self.vbar, show_v, self._show_v, row=0, column=1, sticky="ns")
-        self._set_bar(self.hbar, show_h, self._show_h, row=1, column=0, sticky="ew")
-        self._show_v = show_v
-        self._show_h = show_h
-        self.canvas.itemconfigure(self._item, width=body_w, height=body_h)
-        self.canvas.configure(scrollregion=(0, 0, body_w, body_h))
-        if not show_v:
-            self.canvas.yview_moveto(0)
-        if not show_h:
-            self.canvas.xview_moveto(0)
-
-    @staticmethod
-    def _set_bar(bar, show, shown, **grid):
-        if show and not shown:
-            bar.grid(**grid)
-        elif shown and not show:
-            bar.grid_remove()
 
     def _on_wheel(self, event):
         try:
@@ -197,9 +258,4 @@ class ScreenFit:
                 return
         except (AttributeError, tk.TclError):
             return
-        step = -1 if event.delta > 0 else 1
-        if event.state & 1:
-            if self._show_h:
-                self.canvas.xview_scroll(step, "units")
-        elif self._show_v:
-            self.canvas.yview_scroll(step, "units")
+        self._scroll(event)

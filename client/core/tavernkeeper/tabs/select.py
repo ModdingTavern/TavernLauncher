@@ -9,6 +9,8 @@ from tavern_shared.theme import (
     BG, SURF, SURF2, BORDER, AMBER, AMBERDIM, PARCH, MUTED, _btn, _field, _section_label,
     _mk_scrollbar, _fix_combobox_popdown_colors,
 )
+from tavern_shared.screen_fit import bind_wheel, wheel_step
+from client.core.tavernkeeper.widgets import confirm
 
 
 class SelectTabMixin:
@@ -72,7 +74,7 @@ class SelectTabMixin:
                  font=("Segoe UI",7,"bold")).pack(anchor="w", pady=(0,2))
         lb = tk.Frame(left, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         lb.pack(fill="both", expand=True)
-        self._nearby_canvas = tk.Canvas(lb, bg=SURF, highlightthickness=0)
+        self._nearby_canvas = tk.Canvas(lb, bg=SURF, highlightthickness=0, height=200)
         sb2 = _mk_scrollbar(lb, self._nearby_canvas.yview)
         sb2.pack(side="right", fill="y")
         self._nearby_canvas.config(yscrollcommand=sb2.set)
@@ -89,9 +91,9 @@ class SelectTabMixin:
             self._nearby_canvas.itemconfig(self._nearby_canvas_window, width=e.width))
 
         def _nearby_mousewheel(event):
-            self._nearby_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        self._nearby_canvas.bind("<MouseWheel>", _nearby_mousewheel)
-        self._nearby_inner.bind("<MouseWheel>", _nearby_mousewheel)
+            self._nearby_canvas.yview_scroll(wheel_step(event), "units")
+        bind_wheel(self._nearby_canvas, _nearby_mousewheel)
+        bind_wheel(self._nearby_inner, _nearby_mousewheel)
         self._nearby_mousewheel = _nearby_mousewheel
 
         # ── Right: Selection history ──────────────────────────────────────
@@ -111,17 +113,12 @@ class SelectTabMixin:
         hsb.pack(side="right", fill="y")
         self._history_listbox.config(yscrollcommand=hsb.set)
         self._history_listbox.pack(side="left", fill="both", expand=True, padx=2, pady=2)
-        self._history_listbox.bind("<MouseWheel>",
-            lambda e: self._history_listbox.yview_scroll(int(-1*(e.delta/120)), "units"))
         # Click history entry to re-select that entity
         self._history_listbox.bind("<<ListboxSelect>>", self._on_history_select)
         _btn(right, "Clear", self._on_history_clear,
              font=("Segoe UI",7), pady=2, padx=6).pack(anchor="e", pady=(2,0))
 
-        # Storage
-        self._nearby_items = []
-        self._prefab_groups = {}
-        self._selection_history = []  # list of (eid, name)
+        self._nearby_vars = {}
         self._nearby_listbox = None
 
         _section_label(parent, "SELECT BY PREFAB  (nearest to target player)")
@@ -157,7 +154,10 @@ class SelectTabMixin:
         """Rebuild the checkbox list from items = [(id, name), ...]."""
         for widget in self._nearby_inner.winfo_children():
             widget.destroy()
-        self._nearby_items = []
+        selection = self.models.selection
+        selection.nearby = list(items)
+        selection.checked.clear()
+        self._nearby_vars = {}
         if not items:
             tk.Label(self._nearby_inner, text="(nothing found)", bg=SURF, fg=MUTED,
                      font=("Consolas",9)).pack(anchor="w", padx=6, pady=4)
@@ -178,9 +178,13 @@ class SelectTabMixin:
                            font=("Consolas",9), cursor="hand2", anchor="w")
             lbl.pack(side="left", fill="x", expand=True)
 
-            def _refresh_row_bg(row=row, var=var):
+            def _refresh_row_bg(row=row, var=var, eid=eid):
                 """Colour the whole row amber when checked, normal when not."""
                 checked = var.get()
+                if checked:
+                    selection.checked.add(eid)
+                else:
+                    selection.checked.discard(eid)
                 bg = AMBERDIM if checked else SURF
                 row.config(bg=bg)
                 for c in row.winfo_children():
@@ -208,10 +212,10 @@ class SelectTabMixin:
             # Mousewheel on each row and its children
             mwh = getattr(self, "_nearby_mousewheel", None)
             if mwh:
-                row.bind("<MouseWheel>", mwh)
-                cb.bind("<MouseWheel>", mwh)
-                lbl.bind("<MouseWheel>", mwh)
-            self._nearby_items.append((eid, name, var))
+                bind_wheel(row, mwh)
+                bind_wheel(cb, mwh)
+                bind_wheel(lbl, mwh)
+            self._nearby_vars[eid] = var
         self._nearby_canvas.update_idletasks()
         self._nearby_canvas.configure(scrollregion=self._nearby_canvas.bbox("all"))
 
@@ -258,52 +262,60 @@ class SelectTabMixin:
         if not name:
             messagebox.showinfo("Enter a name", "Type a group name first.", parent=self)
             return
-        checked = [(eid, n) for eid, n, var in self._nearby_items if var.get()]
+        selection = self.models.selection
+        checked = [(eid, n) for eid, n in selection.nearby if eid in selection.checked]
         if not checked:
             messagebox.showinfo("Nothing checked",
                 "Check at least one item in the Nearby list first.", parent=self)
             return
-        self._prefab_groups[name] = checked
-        vals = ["(none)"] + list(self._prefab_groups.keys())
-        self._group_combo["values"] = vals
+        selection.groups[name] = checked
+        selection.group = name
+        self._group_combo["values"] = ["(none)"] + list(selection.groups)
         self._group_combo_var.set(name)
         self.v_group_name.set("")
         self._append_log(f"[Group '{name}' saved: {len(checked)} item(s)]\n", "ok")
 
     def _on_group_select(self, event=None):
+        selection = self.models.selection
         name = self._group_combo_var.get()
-        if name == "(none)" or name not in self._prefab_groups:
+        selection.group = name if name in selection.groups else None
+        if selection.group is None:
             return
-        items = self._prefab_groups[name]
+        items = selection.groups[name]
         self._populate_nearby(items)
         self._append_log(f"[Group '{name}' loaded: {len(items)} item(s)]\n", "ok")
 
     def _on_group_delete(self):
+        selection = self.models.selection
         name = self._group_combo_var.get()
-        if name == "(none)" or name not in self._prefab_groups:
+        if name not in selection.groups:
             return
-        del self._prefab_groups[name]
-        vals = ["(none)"] + list(self._prefab_groups.keys())
-        self._group_combo["values"] = vals
+        del selection.groups[name]
+        selection.group = None
+        self._group_combo["values"] = ["(none)"] + list(selection.groups)
         self._group_combo_var.set("(none)")
         self._append_log(f"[Group '{name}' deleted]\n", "warn")
 
     def _on_destroy_selection(self):
+        if not confirm(self, "Destroy selection",
+                       "Destroy whatever is selected on the server? This can't be undone."):
+            return
         self._send("select destroy")
         # Refresh nearby list so the destroyed object disappears
         self.after(400, self._on_find_nearby)
 
     def _add_to_history(self, eid, name):
         entry = f"{str(eid):<10} {name}"
-        for i, (e, n) in enumerate(self._selection_history):
+        history = self.models.selection.history
+        for i, (e, n) in enumerate(history):
             if e == eid:
-                self._selection_history.pop(i)
+                history.pop(i)
                 self._history_listbox.delete(i)
                 break
-        self._selection_history.insert(0, (eid, name))
+        history.insert(0, (eid, name))
         self._history_listbox.insert(0, entry)
-        if len(self._selection_history) > 50:
-            self._selection_history.pop()
+        if len(history) > 50:
+            history.pop()
             self._history_listbox.delete("end")
 
     def _on_history_select(self, event=None):
@@ -311,13 +323,14 @@ class SelectTabMixin:
         if not sel:
             return
         idx = sel[0]
-        if idx < len(self._selection_history):
-            eid, name = self._selection_history[idx]
+        history = self.models.selection.history
+        if idx < len(history):
+            eid, name = history[idx]
             self._uncheck_all_nearby()
             self._send(f"select {eid}")
 
     def _on_history_clear(self):
-        self._selection_history.clear()
+        self.models.selection.history.clear()
         self._history_listbox.delete(0, "end")
 
     def _on_select_prefab(self):

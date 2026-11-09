@@ -6,7 +6,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from tavern_shared.theme import (
-    BG, SURF, BORDER, AMBER, PARCH, _btn, _hint, _section_label, _mk_scrollbar,
+    BG, SURF, BORDER, AMBER, PARCH, _btn, _hint, _section_label,
 )
 
 
@@ -30,21 +30,7 @@ class SettingsTabMixin:
     ]
 
     def _build_settings_tab(self, parent):
-        canvas_frame = tk.Frame(parent, bg=BG)
-        canvas_frame.pack(fill="both", expand=True)
-        canvas = tk.Canvas(canvas_frame, bg=BG, highlightthickness=0)
-        vsb = _mk_scrollbar(canvas_frame, canvas.yview)
-        vsb.pack(side="right", fill="y")
-        canvas.config(yscrollcommand=vsb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        inner = tk.Frame(canvas, bg=BG)
-        canvas.create_window((0,0), window=inner, anchor="nw")
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-        def _settings_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind("<MouseWheel>", _settings_mousewheel)
-        inner.bind("<MouseWheel>", _settings_mousewheel)
+        inner = parent
 
         _section_label(inner, "SERVER CLOCK")
         row = tk.Frame(inner, bg=BG)

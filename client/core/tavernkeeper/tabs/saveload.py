@@ -9,6 +9,7 @@ from tkinter import filedialog, messagebox, simpledialog
 from tavern_shared.theme import (
     BG, SURF, BORDER, AMBERDIM, PARCH, MUTED, _btn, _section_label, _mk_scrollbar,
 )
+from client.core.tavernkeeper.widgets import confirm
 
 
 class SaveLoadTabMixin:
@@ -74,8 +75,8 @@ class SaveLoadTabMixin:
                     messagebox.showinfo("Nothing to add",
                         "Select something in Find & Select first.", parent=self)
                     return
-                label = f"Item {len(self._save_items)+1}"
-                self._save_items.append((label, spawn_string))
+                label = f"Item {len(self.models.staged)+1}"
+                self.models.staged.append((label, spawn_string))
                 self._save_listbox.insert("end", label)
             self._send_and_capture("select tostring", on_result)
 
@@ -88,8 +89,8 @@ class SaveLoadTabMixin:
         def on_result(rs, rd):
             spawn_string = self._clean_spawn_string(rs) if rs else None
             if spawn_string:
-                label = f"Item {len(self._save_items)+1}"
-                self._save_items.append((label, spawn_string))
+                label = f"Item {len(self.models.staged)+1}"
+                self.models.staged.append((label, spawn_string))
                 self._save_listbox.insert("end", label)
             # Move to next entity after a short delay
             self.after(150, lambda: self._add_group_to_save_list(ids, i + 1))
@@ -100,13 +101,13 @@ class SaveLoadTabMixin:
         if not sel:
             return
         idx = sel[0]
-        old_label, spawn_string = self._save_items[idx]
+        old_label, spawn_string = self.models.staged[idx]
         new_label = simpledialog.askstring(
             "Rename item", "Enter a new name:",
             initialvalue=old_label, parent=self)
         if new_label and new_label.strip():
             new_label = new_label.strip()
-            self._save_items[idx] = (new_label, spawn_string)
+            self.models.staged[idx] = (new_label, spawn_string)
             self._save_listbox.delete(idx)
             self._save_listbox.insert(idx, new_label)
             self._save_listbox.selection_set(idx)
@@ -116,11 +117,13 @@ class SaveLoadTabMixin:
         if not sel:
             return
         idx = sel[0]
-        del self._save_items[idx]
+        if not confirm(self, "Remove item", f"Remove {self.models.staged[idx][0]} from the list?"):
+            return
+        del self.models.staged[idx]
         self._save_listbox.delete(idx)
 
     def _on_save_to_file(self):
-        if not self._save_items:
+        if not self.models.staged:
             messagebox.showinfo("Nothing staged",
                 "Add at least one item to the list first.", parent=self)
             return
@@ -130,7 +133,7 @@ class SaveLoadTabMixin:
         if not path:
             return
         try:
-            data = [{"label": label, "string": s} for label, s in self._save_items]
+            data = [{"label": label, "string": s} for label, s in self.models.staged]
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             messagebox.showinfo("Saved", f"Saved {len(data)} item(s).", parent=self)
@@ -146,24 +149,24 @@ class SaveLoadTabMixin:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self._save_items = [(d.get("label","Item"), d["string"]) for d in data if "string" in d]
+            self.models.staged = [(d.get("label","Item"), d["string"]) for d in data if "string" in d]
             self._save_listbox.delete(0, "end")
-            for label, _ in self._save_items:
+            for label, _ in self.models.staged:
                 self._save_listbox.insert("end", label)
         except Exception as e:
             messagebox.showerror("Couldn't load", str(e), parent=self)
 
     def _on_spawn_all_saved(self):
-        if not self._save_items:
+        if not self.models.staged:
             messagebox.showinfo("Nothing staged",
                 "Add or load some items first.", parent=self)
             return
         def spawn_next(i=0):
-            if i >= len(self._save_items):
+            if i >= len(self.models.staged):
                 return
-            label, s = self._save_items[i]
+            label, s = self.models.staged[i]
             if not self._send(f"spawn string-raw {self._q(s)}"):
-                self._append_log(f"[Spawn All stopped at {i+1} of {len(self._save_items)}: {label}]\n", "err")
+                self._append_log(f"[Spawn All stopped at {i+1} of {len(self.models.staged)}: {label}]\n", "err")
                 return
             self.after(200, lambda: spawn_next(i+1))
         spawn_next()

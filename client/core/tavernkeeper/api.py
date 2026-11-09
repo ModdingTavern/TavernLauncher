@@ -6,13 +6,11 @@ window.api: the supported way for an addon to talk to TavernKeeper.
         api.on_connected(lambda: api.log("hello", "ok"))
         api.run("player list", lambda r: api.log(r.error or str(r.value)))
 
-Everything here runs on the Tk thread. A tab's build function runs again when
-the user reorders tabs, so handlers and toolbar buttons added while a tab builds
-are cleared before it builds again, and it can just add them every time.
+Everything here runs on the Tk thread. A tab is built once, when TavernKeeper
+connects; Reorder Tabs only moves it. A tab whose build raises shows an error
+card instead, and the handlers and toolbar buttons it added are removed.
 """
-from collections import namedtuple
-
-Player = namedtuple("Player", "id name")
+from client.core.tavernkeeper.models import Player
 
 TONES = {"ok": "ok", "warn": "warn", "err": "err", "cyan": "cyan", "normal": ""}
 
@@ -58,7 +56,7 @@ class TavernKeeperApi:
         self._w = window
         self._handlers = {"connected": [], "disconnected": [], "target_changed": []}
         self._buttons = []
-        self._building = False
+        self._build_start = None
         self._last_target = None
         self._pending_log = []
 
@@ -90,7 +88,7 @@ class TavernKeeperApi:
     @property
     def players(self):
         """The last player list, as Player(id, name). id is None if the server gave none."""
-        return list(self._w._roster)
+        return list(self._w.models.roster.players)
 
     @property
     def target(self):
@@ -99,17 +97,12 @@ class TavernKeeperApi:
         name = var.get().strip() if var is not None else ""
         if not name:
             return None
-        for player in self._w._roster:
-            if player.name == name:
-                return player
-        return Player(None, name)
+        return self._w.models.roster.find(name) or Player(None, name)
 
     @property
     def selection(self):
         """Entity ids in the chosen group or ticked in Find & Select. Empty
         means commands act on whatever the server has selected."""
-        if not hasattr(self._w, "_group_combo_var"):
-            return []
         return list(self._w._active_entity_ids() or [])
 
     # Events
@@ -135,18 +128,18 @@ class TavernKeeperApi:
             raise RuntimeError("the toolbar exists only once TavernKeeper is connected")
         button = _btn(self._w._toolbar, text, command, style, font=("Segoe UI", 8), pady=3, padx=8)
         button.pack(side="left", padx=(0, 8))
-        if self._building:
+        if self._build_start is not None:
             self._buttons.append(button)
         return button
 
     # Called by the window
 
     def _add(self, event, fn):
-        self._handlers[event].append((fn, self._building))
+        self._handlers[event].append(fn)
         return fn
 
     def _fire(self, event, *args):
-        for fn, _ in list(self._handlers[event]):
+        for fn in list(self._handlers[event]):
             try:
                 fn(*args)
             except Exception as e:
@@ -154,15 +147,17 @@ class TavernKeeperApi:
                 self._w._report_exception()
 
     def _begin_build(self):
-        for event, handlers in self._handlers.items():
-            self._handlers[event] = [h for h in handlers if not h[1]]
-        for button in self._buttons:
-            button.destroy()
+        self._build_start = {event: len(fns) for event, fns in self._handlers.items()}
         self._buttons = []
-        self._building = True
 
-    def _end_build(self):
-        self._building = False
+    def _end_build(self, failed=False):
+        if failed:
+            for event, count in self._build_start.items():
+                del self._handlers[event][count:]
+            for button in self._buttons:
+                button.destroy()
+        self._build_start = None
+        self._buttons = []
 
     def _ui_ready(self):
         pending, self._pending_log = self._pending_log, []
