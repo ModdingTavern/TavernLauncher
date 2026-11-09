@@ -9,6 +9,7 @@ from tavern_shared.theme import (
     BG, SURF, BORDER, AMBER, PARCH, MUTED, RED, _btn, _field, _section_label,
 )
 from tavern_shared.ws_console_client import WsConsoleClient
+from client.core.tavernkeeper.api import Result
 
 
 class ConnectionMixin:
@@ -92,6 +93,7 @@ class ConnectionMixin:
         self.minsize(1, 1)
         self._build_main_ui()
         self._refresh_players()
+        self.api._fire("connected")
 
     def _on_disconnected(self, msg):
         self._connected = False
@@ -101,6 +103,7 @@ class ConnectionMixin:
             self._append_log(f"\n[{msg}]\n", "err")
         if hasattr(self, "_reconnect_btn"):
             self._reconnect_btn.pack(side="right")
+        self.api._fire("disconnected", msg)
 
     def _reconnect(self):
         """Reconnect in place with the same host and token, so the tabs keep
@@ -129,6 +132,7 @@ class ConnectionMixin:
         self._reconnect_btn.pack_forget()
         self._append_log("[Reconnected]\n", "ok")
         self._refresh_players()
+        self.api._fire("connected")
 
     def _on_line(self, text):
         """Called by WsConsoleClient for streaming output — display only."""
@@ -150,17 +154,24 @@ class ConnectionMixin:
         then calls on_result(result_string, result_data) on the Tk thread.
         quiet and max_wait are kept for API compatibility but max_wait
         is used as the capture timeout."""
-        self._append_log(f"> {cmd}\n", "cyan")
+        self._run_command(cmd, lambda r: on_result(r.raw, r.value), timeout=max_wait)
+
+    def _run_command(self, cmd, on_result, timeout=20.0, quiet=False):
+        """Send a command and hand a Result to on_result on the Tk thread.
+        quiet leaves the command and any failure out of the log."""
+        if not quiet:
+            self._append_log(f"> {cmd}\n", "cyan")
         if not self._connected:
-            self._append_log("Not sent: not connected\n", "err")
-            self.after(0, lambda: on_result(None, None))
+            if not quiet:
+                self._append_log("Not sent: not connected\n", "err")
+            self.after(0, lambda: on_result(Result.failed("Not connected")))
             return
 
         def worker():
-            rs, rd, err = self._ws_client.send_capture(cmd, timeout=max_wait)
-            if err:
-                self.after(0, lambda: self._append_log(f"[{cmd} failed: {err}]\n", "err"))
-            self.after(0, lambda: on_result(rs, rd))
+            result = Result.from_reply(self._ws_client.request(cmd, timeout=timeout))
+            if result.error and not quiet:
+                self.after(0, lambda: self._append_log(f"[{cmd} failed: {result.error}]\n", "err"))
+            self.after(0, lambda: on_result(result))
         threading.Thread(target=worker, daemon=True).start()
 
     @staticmethod

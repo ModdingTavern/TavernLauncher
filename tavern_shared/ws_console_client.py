@@ -84,8 +84,15 @@ class WsConsoleClient:
         return True
 
     def send_capture(self, cmd, timeout=20.0):
+        r = self.request(cmd, timeout)
+        return r["result_string"], r["result_data"], r["error"]
+
+    def request(self, cmd, timeout=20.0):
+        """Send and wait. Returns result_string, result_data, error, timed_out."""
+        def done(rs="", rd=None, err=None, timed_out=False):
+            return {"result_string": rs, "result_data": rd, "error": err, "timed_out": timed_out}
         if not self._connected or not self._ws:
-            return "", None, "Not connected"
+            return done(err="Not connected")
         with self._lock:
             self._cmd_id += 1
             cid    = self._cmd_id
@@ -97,13 +104,13 @@ class WsConsoleClient:
         except Exception as e:
             with self._lock:
                 self._pending.pop(cid, None)
-            return "", None, str(e)
+            return done(err=str(e))
         ev.wait(timeout)
         with self._lock:
             self._pending.pop(cid, None)
         if not ev.is_set():
-            return "", None, f"No reply after {timeout:g}s"
-        return holder["result_string"], holder["result_data"], holder["error"]
+            return done(err=f"No reply after {timeout:g}s", timed_out=True)
+        return done(holder["result_string"], holder["result_data"], holder["error"])
 
     def _lost(self, ws, reason):
         """The link behind ws died. Fails every pending capture and calls

@@ -18,6 +18,7 @@ from tavern_shared.theme import (
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon
 from client.core.tavernkeeper.registry import register_tab, ordered_tabs, registry
 from tavern_shared.reorder_dialog import ReorderDialog
+from client.core.tavernkeeper.api import TavernKeeperApi, Player
 from client.core.tavernkeeper.connection import ConnectionMixin
 from client.core.tavernkeeper.tabs.spawn import SpawnTabMixin
 from client.core.tavernkeeper.tabs.select import SelectTabMixin
@@ -62,6 +63,8 @@ class TavernKeeperWindow(
         self._stop = threading.Event()
         self._prefab_list = None
         self._save_items = []  # list of (label, spawn_string) staged for Save/Load
+        self._roster = []
+        self.api = TavernKeeperApi(self)
         self._build_connect_form()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _finish_dark_window(self)
@@ -79,6 +82,7 @@ class TavernKeeperWindow(
              font=("Segoe UI",8), pady=3, padx=8).pack(side="left", padx=(0,8))
         _btn(h, "☰ Jump to Tab", self._open_jump_to_tab,
              font=("Segoe UI",8), pady=3, padx=8).pack(side="left", padx=(0,8))
+        self._toolbar = h
         self._log_status = tk.StringVar(value="Connected")
         tk.Label(h, textvariable=self._log_status, bg=SURF, fg=MUTED,
                  font=("Segoe UI",9)).pack(side="right", padx=16)
@@ -92,6 +96,7 @@ class TavernKeeperWindow(
         tk.Label(tf, text="Target player:", bg=BG, fg=PARCH,
                  font=("Segoe UI",9,"bold")).pack(side="left")
         self.v_target = tk.StringVar()
+        self.v_target.trace_add("write", lambda *_: self.api._target_written())
         style = ttk.Style()
         style.configure("Tavk.Target.TCombobox", fieldbackground=SURF, background=SURF2,
                         foreground=PARCH, selectbackground=SURF, selectforeground=PARCH,
@@ -134,6 +139,7 @@ class TavernKeeperWindow(
         self.out.pack(side="left", fill="both", expand=True, padx=6, pady=6)
         for t,c in [("ok",GREEN),("warn",AMBER),("err",RED),("cyan",CYAN)]:
             self.out.tag_config(t, foreground=c)
+        self.api._ui_ready()
 
     def _append_log(self, text, tag=""):
         self.out.config(state="normal")
@@ -144,12 +150,14 @@ class TavernKeeperWindow(
     def _refresh_players(self):
         def on_result(rs, rd):
             names = []
+            ids = {}
             if rd and isinstance(rd, list):
                 for item in rd:
                     if isinstance(item, dict):
                         name = item.get("Username") or item.get("username")
                         if name and name not in names:
                             names.append(str(name))
+                            ids[str(name)] = item.get("Id", item.get("id"))
             elif rs and not rs.startswith("System."):
                 for line in rs.splitlines():
                     line = line.strip()
@@ -165,6 +173,7 @@ class TavernKeeperWindow(
                         name = line.split()[0].strip()
                     if name and name not in names:
                         names.append(name)
+            self._roster = [Player(ids.get(n), n) for n in names]
             # Always update — empty list clears the combo cleanly
             self._target_combo["values"] = names
             if names:
@@ -267,11 +276,15 @@ class TavernKeeperWindow(
         nb.pack(fill="both", expand=True)
         self._nb = nb
         self._tab_frames = {}
-        for tab in ordered_tabs():
-            frame = tk.Frame(nb, bg=BG)
-            nb.add(frame, text=f"  {tab['label']}  ")
-            self._tab_frames[tab["key"]] = frame
-            tab["build_fn"](frame, self)
+        self.api._begin_build()
+        try:
+            for tab in ordered_tabs():
+                frame = tk.Frame(nb, bg=BG)
+                nb.add(frame, text=f"  {tab['label']}  ")
+                self._tab_frames[tab["key"]] = frame
+                tab["build_fn"](frame, self)
+        finally:
+            self.api._end_build()
 
     def _rebuild_tabs(self):
         for child in self._tabs_container.winfo_children():
