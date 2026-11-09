@@ -182,6 +182,8 @@ class WsConsoleClient:
                     except Exception:
                         display = str(rd)
                     self._on_line(display + "\n")
+                else:
+                    self._on_line("(no output)\n")
             if cmd_id is not None:
                 with self._lock:
                     entry = self._pending.get(cmd_id)

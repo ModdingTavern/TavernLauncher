@@ -143,6 +143,36 @@ class TavernKeeperWindow(tk.Toplevel):
             self._log_status.set("Disconnected")
         if hasattr(self, "out"):
             self._append_log(f"\n[{msg}]\n", "err")
+        if hasattr(self, "_reconnect_btn"):
+            self._reconnect_btn.pack(side="right")
+
+    def _reconnect(self):
+        """Reconnect in place with the same host and token, so the tabs keep
+        their state."""
+        host = self.v_host.get().strip() or "127.0.0.1"
+        token = self.v_token.get().strip()
+        self._reconnect_btn.config(state="disabled", text="Reconnecting...")
+        self._ws_client = WsConsoleClient()
+
+        def worker():
+            ok, msg = self._ws_client.connect(
+                host, token,
+                on_line=lambda t: self.after(0, lambda p=t: self._on_line(p)),
+                on_disc=lambda r: self.after(0, lambda: self._on_disconnected(r)),
+            )
+            self.after(0, lambda: self._reconnect_done(ok, msg))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _reconnect_done(self, ok, msg):
+        self._reconnect_btn.config(state="normal", text="Reconnect")
+        if not ok:
+            self._append_log(f"[Reconnect failed: {msg}]\n", "err")
+            return
+        self._connected = True
+        self._log_status.set("Connected")
+        self._reconnect_btn.pack_forget()
+        self._append_log("[Reconnected]\n", "ok")
+        self._refresh_players()
 
     def _on_line(self, text):
         """Called by WsConsoleClient for streaming output — display only."""
@@ -152,10 +182,11 @@ class TavernKeeperWindow(tk.Toplevel):
 
     def _send(self, cmd):
         """Fire-and-forget — output arrives via _on_line callback."""
-        if not self._connected:
-            return
         self._append_log(f"> {cmd}\n", "cyan")
-        self._ws_client.send(cmd)
+        if not (self._connected and self._ws_client.send(cmd)):
+            self._append_log("Not sent: not connected\n", "err")
+            return False
+        return True
 
     def _send_and_capture(self, cmd, on_result, quiet=0.4, max_wait=20.0):
         """Send a command and deliver (result_string, result_data) to on_result.
@@ -170,6 +201,8 @@ class TavernKeeperWindow(tk.Toplevel):
 
         def worker():
             rs, rd, err = self._ws_client.send_capture(cmd, timeout=max_wait)
+            if err:
+                self.after(0, lambda: self._append_log(f"[{cmd} failed: {err}]\n", "err"))
             self.after(0, lambda: on_result(rs, rd))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -195,6 +228,9 @@ class TavernKeeperWindow(tk.Toplevel):
         self._log_status = tk.StringVar(value="Connected")
         tk.Label(h, textvariable=self._log_status, bg=SURF, fg=MUTED,
                  font=("Segoe UI",9)).pack(side="right", padx=16)
+        # Packed by _on_disconnected, hidden again once reconnected
+        self._reconnect_btn = _btn(h, "Reconnect", self._reconnect,
+             font=("Segoe UI",8), pady=3, padx=8)
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
         tf = tk.Frame(self, bg=BG)
@@ -1058,8 +1094,14 @@ class TavernKeeperWindow(tk.Toplevel):
             def send_next(i=0):
                 if i >= len(ids):
                     return
-                self._send(f"select {ids[i]}")
-                self.after(80, lambda: (self._send(cmd), self.after(80, lambda: send_next(i+1))))
+                stopped = f"[Stopped at {i+1} of {len(ids)}]\n"
+                if not self._send(f"select {ids[i]}"):
+                    return self._append_log(stopped, "err")
+                def then():
+                    if not self._send(cmd):
+                        return self._append_log(stopped, "err")
+                    self.after(80, lambda: send_next(i+1))
+                self.after(80, then)
             send_next()
         else:
             self._send(cmd)
@@ -1343,8 +1385,10 @@ class TavernKeeperWindow(tk.Toplevel):
         def spawn_next(i=0):
             if i >= len(self._save_items):
                 return
-            _, s = self._save_items[i]
-            self._send(f"spawn string-raw {self._q(s)}")
+            label, s = self._save_items[i]
+            if not self._send(f"spawn string-raw {self._q(s)}"):
+                self._append_log(f"[Spawn All stopped at {i+1} of {len(self._save_items)}: {label}]\n", "err")
+                return
             self.after(200, lambda: spawn_next(i+1))
         spawn_next()
 

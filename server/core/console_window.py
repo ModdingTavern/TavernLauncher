@@ -219,7 +219,8 @@ class ConsoleWindow(tk.Toplevel):
             return
         self.v_cmd.set("")
         self._append(f"> {cmd}\n", "cyan")
-        self._ws_client.send(cmd)
+        if not self._ws_client.send(cmd):
+            self._append("Not sent: not connected\n", "err")
 
     def _on_close(self):
         self._stop.set()
