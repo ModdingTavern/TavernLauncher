@@ -158,13 +158,13 @@ class AdminTabMixin:
         target = self._current_target()
         if not target:
             return
-        self._send(f"player kick {self._q(target)}")
+        self._send(f"player kick {self._q_target(target)}")
 
     def _on_kill(self):
         target = self._current_target()
         if not target:
             return
-        self._send(f"player kill {self._q(target)}")
+        self._send(f"player kill {self._q_target(target)}")
 
     def _on_message(self):
         target = self._current_target()
@@ -177,7 +177,7 @@ class AdminTabMixin:
             duration = float(self.v_admin_duration.get().strip())
         except ValueError:
             duration = 5
-        self._send(f"player message {self._q(target)} {self._q(msg)} {duration}")
+        self._send(f"player message {self._q_target(target)} {self._q(msg)} {duration}")
 
     def _on_message_all(self):
         msg = self.v_admin_message.get().strip()
@@ -197,20 +197,20 @@ class AdminTabMixin:
         if not dest:
             messagebox.showinfo("Enter a destination", "Type a player name to teleport to.", parent=self)
             return
-        self._send(f"player teleport {self._q(target)} {self._q(dest)}")
+        self._send(f"player teleport {self._q_target(target)} {self._q(dest)}")
 
     def _on_quick_teleport(self, spawn_area_identifier):
         target = self._current_target()
         if not target:
             return
-        self._send(f"player teleport {self._q(target)} {spawn_area_identifier}")
+        self._send(f"player teleport {self._q_target(target)} {spawn_area_identifier}")
 
     def _on_set_home(self):
         target = self._current_target()
         if not target:
             return
         home = self.v_sethome_value.get().strip() or "reset"
-        self._send(f"player set-home {self._q(target)} {self._q(home)}")
+        self._send(f"player set-home {self._q_target(target)} {self._q(home)}")
 
     def _on_set_stat(self, stat_name, var):
         target = self._current_target()
@@ -233,8 +233,8 @@ class AdminTabMixin:
                             except Exception:
                                 pass
 
-        self._send(f"player set-stat {self._q(target)} {stat_name} {value}")
-        self._send_and_capture(f"player list-stats {self._q(target)}", on_refresh)
+        self._send(f"player set-stat {self._q_target(target)} {stat_name} {value}")
+        self._send_and_capture(f"player list-stats {self._q_target(target)}", on_refresh)
 
     def _on_refresh_stats(self):
         target = self._current_target()
@@ -253,4 +253,4 @@ class AdminTabMixin:
                                 pass
             elif rs:
                 self._append_log(f"[Stats]\n{rs}\n", "ok")
-        self._send_and_capture(f"player list-stats {self._q(target)}", on_result)
+        self._send_and_capture(f"player list-stats {self._q_target(target)}", on_result)

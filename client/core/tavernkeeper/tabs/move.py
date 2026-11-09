@@ -114,7 +114,7 @@ class MoveTabMixin:
             if not target:
                 return
             self._send("select destroy")
-            self._send(f"spawn string {self._q(target)} {self._q(rescaled)}")
+            self._send(f"spawn string {self._q_target(target)} {self._q(rescaled)}")
         self._send_and_capture("select tostring", on_got_string)
 
     def _rescale_entity_list(self, ids, i, scale):
@@ -129,7 +129,7 @@ class MoveTabMixin:
                     target = self._current_target()
                     if target:
                         self._send("select destroy")
-                        self._send(f"spawn string {self._q(target)} {self._q(rescaled)}")
+                        self._send(f"spawn string {self._q_target(target)} {self._q(rescaled)}")
             self.after(200, lambda: self._rescale_entity_list(ids, i + 1, scale))
         self.after(80, lambda: self._send_and_capture("select tostring", on_got_string))
 

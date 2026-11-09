@@ -251,7 +251,7 @@ class SelectTabMixin:
                         except ValueError:
                             pass
             self._populate_nearby(items)
-        self._send_and_capture(f"select find {self._q(target)} {diameter}", on_result, quiet=0.6)
+        self._send_and_capture(f"select find {self._q_target(target)} {diameter}", on_result, quiet=0.6)
 
     def _on_group_save(self):
         name = self.v_group_name.get().strip()
@@ -328,7 +328,7 @@ class SelectTabMixin:
         if not prefab:
             messagebox.showinfo("Pick a prefab", "Browse for a prefab first.", parent=self)
             return
-        self._send(f"select prefab {prefab} {self._q(target)}")
+        self._send(f"select prefab {prefab} {self._q_target(target)}")
 
     def _on_get_string(self):
         def on_result(rs, rd):
@@ -340,4 +340,4 @@ class SelectTabMixin:
         target = self._current_target()
         if not target:
             return
-        self._send(f"select look-at {self._q(target)}")
+        self._send(f"select look-at {self._q_target(target)}")

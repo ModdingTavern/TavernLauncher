@@ -156,9 +156,10 @@ class ConnectionMixin:
         is used as the capture timeout."""
         self._run_command(cmd, lambda r: on_result(r.raw, r.value), timeout=max_wait)
 
-    def _run_command(self, cmd, on_result, timeout=20.0, quiet=False):
+    def _run_command(self, cmd, on_result, timeout=20.0, quiet=False, output=True):
         """Send a command and hand a Result to on_result on the Tk thread.
-        quiet leaves the command and any failure out of the log."""
+        quiet leaves the command, its reply and any failure out of the log;
+        output=False leaves out only the reply."""
         if not quiet:
             self._append_log(f"> {cmd}\n", "cyan")
         if not self._connected:
@@ -168,7 +169,7 @@ class ConnectionMixin:
             return
 
         def worker():
-            result = Result.from_reply(self._ws_client.request(cmd, timeout=timeout))
+            result = Result.from_reply(self._ws_client.request(cmd, timeout=timeout, show=output and not quiet))
             if result.error and not quiet:
                 self.after(0, lambda: self._append_log(f"[{cmd} failed: {result.error}]\n", "err"))
             self.after(0, lambda: on_result(result))

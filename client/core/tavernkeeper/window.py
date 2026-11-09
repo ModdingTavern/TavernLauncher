@@ -18,9 +18,10 @@ from tavern_shared.theme import (
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon
 from client.core.tavernkeeper.registry import register_tab, ordered_tabs, registry
 from tavern_shared.reorder_dialog import ReorderDialog
-from client.core.tavernkeeper.api import TavernKeeperApi, Player
+from client.core.tavernkeeper.api import TavernKeeperApi
 from client.core.tavernkeeper.connection import ConnectionMixin
 from client.core.tavernkeeper.console_drawer import ConsoleDrawerMixin
+from client.core.tavernkeeper.roster import RosterMixin
 from client.core.tavernkeeper.tabs.spawn import SpawnTabMixin
 from client.core.tavernkeeper.tabs.select import SelectTabMixin
 from client.core.tavernkeeper.tabs.move import MoveTabMixin
@@ -32,6 +33,7 @@ from client.core.tavernkeeper.tabs.admin import AdminTabMixin
 class TavernKeeperWindow(
     ConnectionMixin,
     ConsoleDrawerMixin,
+    RosterMixin,
     SpawnTabMixin,
     SelectTabMixin,
     MoveTabMixin,
@@ -74,8 +76,8 @@ class TavernKeeperWindow(
     # ── Main UI ──────────────────────────────────────────────────────────────
 
     def _build_main_ui(self):
-        self.minsize(820, 820)
-        self.geometry("860x900")
+        self.minsize(1020, 820)
+        self.geometry("1060x900")
         h = tk.Frame(self, bg=SURF, height=44)
         h.pack(fill="x"); h.pack_propagate(False)
         tk.Label(h, text="🧩  TavernKeeper", bg=SURF, fg=AMBER,
@@ -98,7 +100,7 @@ class TavernKeeperWindow(
         tk.Label(tf, text="Target player:", bg=BG, fg=PARCH,
                  font=("Segoe UI",9,"bold")).pack(side="left")
         self.v_target = tk.StringVar()
-        self.v_target.trace_add("write", lambda *_: self.api._target_written())
+        self.v_target.trace_add("write", lambda *_: (self._sync_roster_selection(), self.api._target_written()))
         style = ttk.Style()
         style.configure("Tavk.Target.TCombobox", fieldbackground=SURF, background=SURF2,
                         foreground=PARCH, selectbackground=SURF, selectforeground=PARCH,
@@ -130,6 +132,7 @@ class TavernKeeperWindow(
                                      sashrelief="flat", opaqueresize=True)
         self._paned.pack(fill="both", expand=True)
         self._tabs_pane = tk.Frame(self._paned, bg=BG)
+        self._build_player_sidebar(self._tabs_pane).pack(side="left", fill="y", padx=(12,0), pady=(6,6))
         self._tabs_container = tk.Frame(self._tabs_pane, bg=BG)
         self._tabs_container.pack(fill="both", expand=True, padx=12, pady=(6,6))
         self._console_drawer = self._build_console_drawer(self._paned)
@@ -143,42 +146,6 @@ class TavernKeeperWindow(
         self.out.insert("end", text, (tag,) if tag == "err" else (tag, "nonerr") if tag else ("nonerr",))
         self.out.see("end")
         self.out.config(state="disabled")
-
-    def _refresh_players(self):
-        def on_result(rs, rd):
-            names = []
-            ids = {}
-            if rd and isinstance(rd, list):
-                for item in rd:
-                    if isinstance(item, dict):
-                        name = item.get("Username") or item.get("username")
-                        if name and name not in names:
-                            names.append(str(name))
-                            ids[str(name)] = item.get("Id", item.get("id"))
-            elif rs and not rs.startswith("System."):
-                for line in rs.splitlines():
-                    line = line.strip()
-                    if not line or "UserID" in line or line.startswith("-"):
-                        continue
-                    if line.startswith("[CommandService") or line == "Success":
-                        continue
-                    if line.startswith("System."):
-                        continue
-                    if " (" in line:
-                        name = line.split(" (")[0].strip()
-                    else:
-                        name = line.split()[0].strip()
-                    if name and name not in names:
-                        names.append(name)
-            self._roster = [Player(ids.get(n), n) for n in names]
-            # Always update — empty list clears the combo cleanly
-            self._target_combo["values"] = names
-            if names:
-                if not self.v_target.get() or self.v_target.get() not in names:
-                    self.v_target.set(names[0])
-            else:
-                self.v_target.set("")
-        self._send_and_capture("player list", on_result)
 
     def _current_target(self):
         target = self.v_target.get().strip()
@@ -307,6 +274,8 @@ class TavernKeeperWindow(
 
     def _on_close(self):
         self._stop.set()
+        if hasattr(self, "_roster_after"):
+            self.after_cancel(self._roster_after)
         if hasattr(self, "_ws_client") and self._ws_client:
             self._ws_client.disconnect()
         self.destroy()

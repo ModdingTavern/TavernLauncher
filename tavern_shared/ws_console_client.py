@@ -25,6 +25,7 @@ class WsConsoleClient:
         self._connected = False
         self._cmd_id    = 0
         self._pending   = {}
+        self._silent    = set()
         self._stop      = threading.Event()
         self._on_line   = None
         self._on_disc   = None
@@ -87,8 +88,9 @@ class WsConsoleClient:
         r = self.request(cmd, timeout)
         return r["result_string"], r["result_data"], r["error"]
 
-    def request(self, cmd, timeout=20.0):
-        """Send and wait. Returns result_string, result_data, error, timed_out."""
+    def request(self, cmd, timeout=20.0, show=True):
+        """Send and wait. Returns result_string, result_data, error, timed_out.
+        show=False keeps the reply away from on_line."""
         def done(rs="", rd=None, err=None, timed_out=False):
             return {"result_string": rs, "result_data": rd, "error": err, "timed_out": timed_out}
         if not self._connected or not self._ws:
@@ -99,6 +101,8 @@ class WsConsoleClient:
             ev     = threading.Event()
             holder = {"result_string": "", "result_data": None, "error": None}
             self._pending[cid] = (ev, holder)
+            if not show:
+                self._silent.add(cid)
         try:
             self._ws.send(json.dumps({"id": cid, "content": cmd}))
         except Exception as e:
@@ -176,7 +180,9 @@ class WsConsoleClient:
                 err = _exception_text(data.get("Exception"))
             elif data is not None:
                 rs = str(data)
-            if self._on_line:
+            shown = cmd_id not in self._silent
+            self._silent.discard(cmd_id)
+            if self._on_line and shown:
                 if err:
                     self._on_line(f"Error: {err}\n")
                 elif rs and not rs.startswith("System."):

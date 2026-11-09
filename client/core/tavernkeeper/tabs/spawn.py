@@ -55,7 +55,7 @@ class SpawnTabMixin:
             messagebox.showinfo("Enter a prefab", "Pick or type a prefab first.", parent=self)
             return
         args = self.v_spawn_args.get().strip()
-        cmd = f"spawn {self._q(target)} {self._q(prefab)}"
+        cmd = f"spawn {self._q_target(target)} {self._q(prefab)}"
         if args:
             cmd += f" {args}"
         self._send(cmd)
