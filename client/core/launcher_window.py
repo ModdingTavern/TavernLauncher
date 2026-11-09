@@ -24,6 +24,7 @@ from tavern_shared.theme import (
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon, _header_crop_box
 from tavern_shared.help_pane import attach_help_tab
+from tavern_shared.screen_fit import ScreenFit
 from tavern_shared.assets import _HEADER_BANNER_IMG
 try:
     from PIL import Image as _PILImage, ImageTk as _PILImageTk, ImageEnhance as _PILImageEnhance
@@ -101,29 +102,22 @@ class ClientLauncher(tk.Tk):
         self._exe_check_job   = None
         self._build_ui()
         self._load()
-        # Start at exactly the size the fully-built layout needs, then set
-        # that as the floor — shrinking further would start cutting into
-        # either the log area or the bottom toggle row (whichever runs out
-        # of room first), while growing beyond it just gives the log more
-        # room to breathe. fit_w used to be a hardcoded guess that went
-        # stale every time a row gained another button/checkbox — measuring
-        # it the same way fit_h already was is what actually keeps this
-        # correct going forward.
-        self.update_idletasks()
-        fit_w = max(540, self.winfo_reqwidth())
-        fit_h = self.winfo_reqheight()
-        self.geometry(f"{fit_w}x{fit_h}")
-        self.minsize(fit_w, fit_h)
         _finish_dark_window(self)
         attach_help_tab(self)
+
+    def deiconify(self):
+        self._screen_fit.fit_once()
+        super().deiconify()
 
     # ── UI ─────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
+        self._screen_fit = ScreenFit(self, BG)
+        body = self._screen_fit.body
         self._header()
 
-        _section_label(self, "Path to 'A Township Tale.exe'")
-        pf = _field(self)
+        _section_label(body, "Path to 'A Township Tale.exe'")
+        pf = _field(body)
         self.v_exe = tk.StringVar()
         self.v_exe.trace_add("write", self._on_exe_changed)
         tk.Entry(pf, textvariable=self.v_exe, bg=SURF, fg=PARCH,
@@ -131,7 +125,7 @@ class ClientLauncher(tk.Tk):
                  bd=6).pack(side="left", fill="x", expand=True)
         _btn(pf, "Browse", self._browse, font=("Segoe UI",9),
              padx=10, pady=6).pack(side="right")
-        btn_row_mods = tk.Frame(self, bg=BG)
+        btn_row_mods = tk.Frame(body, bg=BG)
         btn_row_mods.pack(fill="x", padx=20, pady=(4,0))
         self._patch_btn = _btn(btn_row_mods, "🩹 Patch", self._on_patch_click,
              font=("Segoe UI",9), pady=5, padx=10)
@@ -142,25 +136,25 @@ class ClientLauncher(tk.Tk):
         _btn(btn_row_mods, "🎮 Game Settings", self._open_game_settings,
              font=("Segoe UI",9), pady=5, padx=10).pack(side="right")
 
-        _divider(self)
+        _divider(body)
 
-        _section_label(self, "CHOOSE YOUR USERNAME")
-        nf = _field(self)
+        _section_label(body, "CHOOSE YOUR USERNAME")
+        nf = _field(body)
         self.v_username = tk.StringVar()
         tk.Entry(nf, textvariable=self.v_username, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10),
                  bd=6).pack(fill="x")
 
-        _section_label(self, "CHOOSE YOUR PLATFORM")
-        pf2 = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        _section_label(body, "CHOOSE YOUR PLATFORM")
+        pf2 = tk.Frame(body, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         pf2.pack(fill="x", padx=20, pady=(0,4))
         self.v_platform = tk.StringVar(value="SteamVR")
         _mk_combobox(pf2, self.v_platform, ["SteamVR","Quest","Fly"])
 
-        _divider(self)
+        _divider(body)
 
-        _section_label(self, "Destination (leave blank for localhost)")
-        sf = _field(self)
+        _section_label(body, "Destination (leave blank for localhost)")
+        sf = _field(body)
         self.v_ip = tk.StringVar()
         self.v_ip.trace_add("write", self._on_ip_changed)
         tk.Entry(sf, textvariable=self.v_ip, bg=SURF, fg=PARCH,
@@ -171,7 +165,7 @@ class ClientLauncher(tk.Tk):
                  insertbackground=AMBER, relief="flat", font=("Consolas",10),
                  bd=6, width=6, justify="center").pack(side="left", padx=(4,0))
 
-        btn_row_dest = tk.Frame(self, bg=BG)
+        btn_row_dest = tk.Frame(body, bg=BG)
         btn_row_dest.pack(fill="x", padx=20, pady=(4,0))
         _btn(btn_row_dest, "⚑ Saved",             self._open_server_list,
              font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
@@ -192,18 +186,18 @@ class ClientLauncher(tk.Tk):
         build_launcher_actions(btn_row_dest, self)
 
         # ── Action area ──────────────────────────────────────────────────────
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=20, pady=6)
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", padx=20, pady=6)
 
         # Status line shown after Check Server — plain label, not a box
         self._check_status = tk.StringVar(value="")
-        self._check_label = tk.Label(self, textvariable=self._check_status,
+        self._check_label = tk.Label(body, textvariable=self._check_status,
                  bg=BG, fg=MUTED, font=("Segoe UI",9),
                  justify="left", anchor="w", wraplength=480)
         self._check_label.pack(fill="x", padx=22, pady=(0,4))
 
         # Check Server, Join Server, and Menu Menu sit side by side.
         # Checking is purely optional/informational now, never a gate on joining.
-        action_row = tk.Frame(self, bg=BG)
+        action_row = tk.Frame(body, bg=BG)
         action_row.pack(fill="x", padx=20, pady=(0,4))
         self._check_btn = _btn(action_row, "🔍  Check Server", self._do_check,
                                 font=("Georgia",12,"bold"), pady=14)
@@ -214,14 +208,14 @@ class ClientLauncher(tk.Tk):
         self._menu_btn = _btn(action_row, "🏠  Main Menu", self._do_launch_menu, font=("Georgia",12,"bold"), pady=14)
 
         # ── Log ───────────────────────────────────────────────────────────────
-        log_header = tk.Frame(self, bg=BG)
+        log_header = tk.Frame(body, bg=BG)
         log_header.pack(fill="x")
         tk.Label(log_header, text="GAME LOG", bg=BG, fg=MUTED,
                  font=("Georgia",8,"bold")).pack(side="left", padx=22, pady=(7,3))
         self._archive_log_btn = _btn(log_header, "🗄 Archive Log", self._on_archive_log_click,
              font=("Segoe UI",7), pady=2, padx=6)
         self._archive_log_btn.pack(side="right", padx=(0,20))
-        lf = tk.Frame(self, bg=BG)
+        lf = tk.Frame(body, bg=BG)
         lf.pack(fill="both", expand=True, padx=20, pady=(0,8))
         lb = tk.Frame(lf, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         lb.pack(fill="both", expand=True)
@@ -239,7 +233,8 @@ class ClientLauncher(tk.Tk):
 
         # ── Enhanced Debugging / Show MelonLoader toggles ────────────────────
         df = tk.Frame(self, bg=BG)
-        df.pack(side="bottom", fill="x", padx=14, pady=(0,6))
+        df.pack(side="bottom", fill="x", padx=14, pady=(0,6), before=self._screen_fit.shell)
+        self._screen_fit.set_parts(df, self.log)
         self.v_debug_helper = tk.BooleanVar(value=False)
         tk.Checkbutton(df, text="Enhanced Debugging", variable=self.v_debug_helper,
                        command=self._save, bg=BG, fg=MUTED, selectcolor=SURF,
@@ -259,7 +254,8 @@ class ClientLauncher(tk.Tk):
         self._addons_btn.pack(side="right", padx=(0,6))
 
     def _header(self):
-        h = tk.Frame(self, bg=SURF, height=64)
+        body = self._screen_fit.body
+        h = tk.Frame(body, bg=SURF, height=64)
         h.pack(fill="x"); h.pack_propagate(False)
 
         canvas = tk.Canvas(h, bg=SURF, highlightthickness=0, bd=0)
@@ -306,7 +302,7 @@ class ClientLauncher(tk.Tk):
                                                      window=self._token_btn, state="hidden")
 
         canvas.bind("<Configure>", self._on_header_resize)
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x")
 
     def _on_header_resize(self, event):
         """Rescales the banner to fill the header exactly, and keeps the

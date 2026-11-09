@@ -21,6 +21,7 @@ from tavern_shared.theme import (
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon, _header_crop_box
 from tavern_shared.help_pane import attach_help_tab
+from tavern_shared.screen_fit import ScreenFit
 from tavern_shared.assets import _HEADER_BANNER_IMG
 try:
     from PIL import Image as _PILImage, ImageTk as _PILImageTk, ImageEnhance as _PILImageEnhance
@@ -94,22 +95,19 @@ class ServerLauncher(tk.Tk):
         self._start_log_tailer()
         self._start_auto_archive_check()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        # Same reasoning as the client launcher — fit_w used to be a
-        # hardcoded guess that went stale every time a row gained another
-        # button/checkbox; measuring it the same way fit_h already was is
-        # what actually keeps this correct going forward.
-        self.update_idletasks()
-        fit_w = max(560, self.winfo_reqwidth())
-        fit_h = self.winfo_reqheight()
-        self.geometry(f"{fit_w}x{fit_h}")
-        self.minsize(fit_w, fit_h)
         _finish_dark_window(self)
         attach_help_tab(self)
 
+    def deiconify(self):
+        self._screen_fit.fit_once()
+        super().deiconify()
+
     def _build_ui(self):
+        self._screen_fit = ScreenFit(self, BG, min_open_width=560)
+        body = self._screen_fit.body
         self._header()
-        _section_label(self, "Path to 'A Township Tale.exe'")
-        pf = _field(self)
+        _section_label(body, "Path to 'A Township Tale.exe'")
+        pf = _field(body)
         self.v_exe = tk.StringVar()
         self.v_exe.trace_add("write", self._on_exe_changed)
         tk.Entry(pf, textvariable=self.v_exe, bg=SURF, fg=PARCH,
@@ -117,7 +115,7 @@ class ServerLauncher(tk.Tk):
                  bd=6).pack(side="left", fill="x", expand=True)
         _btn(pf, "Browse", self._browse, font=("Segoe UI",9),
              padx=10, pady=6).pack(side="right")
-        btn_row_mods = tk.Frame(self, bg=BG)
+        btn_row_mods = tk.Frame(body, bg=BG)
         btn_row_mods.pack(fill="x", padx=20, pady=(4,0))
         self._patch_btn = _btn(btn_row_mods, "🩹 Patch", self._on_patch_click,
              font=("Segoe UI",9), pady=5, padx=10)
@@ -125,21 +123,21 @@ class ServerLauncher(tk.Tk):
         self._mods_btn = _btn(btn_row_mods, "🧪 Mods", self._open_mods,
              font=("Segoe UI",9), pady=5, padx=10)
         self._mods_btn.pack(side="left", padx=(6,0))
-        _section_label(self, "GAME PORT")
-        pf2 = _field(self)
+        _section_label(body, "GAME PORT")
+        pf2 = _field(body)
         self.v_port = tk.StringVar(value="1757")
         tk.Entry(pf2, textvariable=self.v_port, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
-        _hint(self, "Forward 1757–1762 (UDP+TCP) for remote players.")
-        _divider(self)
+        _hint(body, "Forward 1757–1762 (UDP+TCP) for remote players.")
+        _divider(body)
         self._sv_name_var = tk.StringVar(value="—")
-        nf = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        nf = tk.Frame(body, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         nf.pack(fill="x", padx=20, pady=(0,4))
         tk.Label(nf, text="SERVER NAME", bg=SURF, fg=MUTED,
                  font=("Segoe UI",8,"bold")).pack(side="left", padx=10, pady=6)
         tk.Label(nf, textvariable=self._sv_name_var, bg=SURF, fg=AMBER,
                  font=("Georgia",11,"bold")).pack(side="left", padx=4, pady=6)
-        tr = tk.Frame(self, bg=BG)
+        tr = tk.Frame(body, bg=BG)
         tr.pack(fill="x", padx=20, pady=(4,4))
         _btn(tr, "⚙ Settings", self._open_settings, font=("Segoe UI",9),
              pady=7, padx=12).pack(side="left")
@@ -159,8 +157,8 @@ class ServerLauncher(tk.Tk):
              pady=7, padx=12).pack(side="left", padx=6)
         _btn(tr, "📁 Saves",    self._open_saves,    font=("Segoe UI",9),
              pady=7, padx=12).pack(side="right")
-        _divider(self)
-        sf = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        _divider(body)
+        sf = tk.Frame(body, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         sf.pack(fill="x", padx=20, pady=(0,6))
         self._dot = tk.Canvas(sf, width=10, height=10, bg=SURF, highlightthickness=0)
         self._dot.pack(side="left", padx=(10,6), pady=8)
@@ -171,7 +169,7 @@ class ServerLauncher(tk.Tk):
         self._pid_var = tk.StringVar()
         tk.Label(sf, textvariable=self._pid_var, bg=SURF, fg=AMBERDIM,
                  font=MONO).pack(side="right", padx=10)
-        bf = tk.Frame(self, bg=BG)
+        bf = tk.Frame(body, bg=BG)
         bf.pack(fill="x", padx=20, pady=(0,6))
         self._btn_start = _btn(bf, "⚔   Open Server", self._start, "success",
                                font=("Georgia",12,"bold"), pady=12)
@@ -180,14 +178,14 @@ class ServerLauncher(tk.Tk):
                               font=("Georgia",12,"bold"), pady=12)
         self._btn_stop.pack(fill="x")
         self._btn_stop.config(state="disabled")
-        log_header = tk.Frame(self, bg=BG)
+        log_header = tk.Frame(body, bg=BG)
         log_header.pack(fill="x")
         tk.Label(log_header, text="SERVER LOG", bg=BG, fg=MUTED,
                  font=("Georgia",8,"bold")).pack(side="left", padx=22, pady=(7,3))
         self._archive_log_btn = _btn(log_header, "🗄 Archive Log", self._on_archive_log_click,
              font=("Segoe UI",7), pady=2, padx=6)
         self._archive_log_btn.pack(side="right", padx=(0,20))
-        lf = tk.Frame(self, bg=BG)
+        lf = tk.Frame(body, bg=BG)
         lf.pack(fill="both", expand=True, padx=20, pady=(0,8))
         lb = tk.Frame(lf, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         lb.pack(fill="both", expand=True)
@@ -205,7 +203,8 @@ class ServerLauncher(tk.Tk):
 
         # ── Enhanced Debugging / Show MelonLoader toggles ────────────────────
         df = tk.Frame(self, bg=BG)
-        df.pack(side="bottom", fill="x", padx=14, pady=(0,6))
+        df.pack(side="bottom", fill="x", padx=14, pady=(0,6), before=self._screen_fit.shell)
+        self._screen_fit.set_parts(df, self.log)
         self.v_debug_helper = tk.BooleanVar(value=False)
         tk.Checkbutton(df, text="Enhanced Debugging", variable=self.v_debug_helper,
                        command=self._save, bg=BG, fg=MUTED, selectcolor=SURF,
@@ -249,7 +248,8 @@ class ServerLauncher(tk.Tk):
         self._addons_btn.pack(side="right", padx=(0,6))
 
     def _header(self):
-        h = tk.Frame(self, bg=SURF, height=64)
+        body = self._screen_fit.body
+        h = tk.Frame(body, bg=SURF, height=64)
         h.pack(fill="x"); h.pack_propagate(False)
 
         canvas = tk.Canvas(h, bg=SURF, highlightthickness=0, bd=0)
@@ -289,7 +289,7 @@ class ServerLauncher(tk.Tk):
                 self._copy_token_btn_item = item
 
         canvas.bind("<Configure>", self._on_header_resize)
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x")
 
     def _open_discord(self):
         webbrowser.open(DISCORD_URL)
