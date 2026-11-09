@@ -6,13 +6,11 @@ on its own status line, in the server's words when something fails.
 import re
 import tkinter as tk
 from collections import Counter
-from tkinter import ttk
 
-from tavern_shared.theme import (
-    BG, SURF, SURF2, AMBER, AMBERDIM, PARCH, MUTED, GREEN, RED, _btn, _section_label,
-    _fix_combobox_popdown_colors,
+from tavern_shared.theme import BG, SURF, SURF2, AMBER, PARCH, MUTED, RED, _section_label
+from client.core.tavernkeeper.widgets import (
+    confirm, form_button, form_combo, form_entry, form_row, form_text, read_number, say, status_line,
 )
-from client.core.tavernkeeper.widgets import confirm
 
 # SpawnAreaIdentifier values that work on the stock map. The others throw or are dev-only.
 PLACES = (
@@ -22,7 +20,6 @@ PLACES = (
 )
 PATHS = ("Mining", "Forging", "Woodcutting", "Melee", "Ranged")
 STAT_MODES = ("Base", "Min", "Max")
-PLAYER_NOT_FOUND = re.compile(r"Player(List)? \w+ : value was null")
 
 
 def _place_label(name):
@@ -31,15 +28,6 @@ def _place_label(name):
 
 def _number(value):
     return f"{round(value, 3):g}"
-
-
-def _error_text(error):
-    text = " ".join(re.sub(r"^\[CommandService\.Handle\]\s*", "", error).split())
-    if PLAYER_NOT_FOUND.search(text):
-        return "That player isn't online."
-    if text == "Failed sending request":
-        return "This server can't look up player accounts, so this doesn't work here."
-    return text
 
 
 def _item_name(item):
@@ -63,47 +51,6 @@ def _describe_inventory(row):
             f"Everything ({len(seen)}): {everything or 'empty'}")
 
 
-def _row(parent):
-    row = tk.Frame(parent, bg=BG)
-    row.pack(fill="x", padx=20, pady=(0, 4))
-    return row
-
-
-def _text(row, text):
-    tk.Label(row, text=text, bg=BG, fg=PARCH, font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
-
-
-def _entry(row, var, width):
-    entry = tk.Entry(row, textvariable=var, bg=SURF, fg=PARCH, insertbackground=AMBER, relief="flat",
-                     font=("Consolas", 10), bd=4, width=width)
-    entry.pack(side="left", padx=(0, 8))
-    return entry
-
-
-def _action(row, text, command, style="normal"):
-    font = ("Segoe UI", 9, "bold") if style != "normal" else ("Segoe UI", 9)
-    _btn(row, text, command, style, font=font, pady=5, padx=10).pack(side="left", padx=(0, 6))
-
-
-def _combo(row, var, values=(), width=18, editable=False, **options):
-    combo = ttk.Combobox(row, textvariable=var, values=values, width=width, font=("Consolas", 10),
-                         style="Tavk.Target.TCombobox", state="normal" if editable else "readonly", **options)
-    combo.pack(side="left", padx=(0, 8))
-    _fix_combobox_popdown_colors(combo, SURF, PARCH, AMBERDIM, "#ffd080")
-    return combo
-
-
-def _status(parent):
-    label = tk.Label(parent, text="", bg=BG, fg=MUTED, font=("Segoe UI", 8), anchor="w", justify="left",
-                     wraplength=600)
-    label.pack(fill="x", padx=22, pady=(0, 2))
-    return label
-
-
-def _say(label, text, color=MUTED):
-    label.config(text=text, fg=color)
-
-
 class PlayersTabMixin:
     def _build_players_tab(self, parent):
         self._stat_rows = {}
@@ -114,96 +61,96 @@ class PlayersTabMixin:
                  bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w", padx=20, pady=(10, 2))
 
         _section_label(parent, "MODERATE")
-        row = _row(parent)
-        _text(row, "Reason:")
+        row = form_row(parent)
+        form_text(row, "Reason:")
         self.v_kick_reason = tk.StringVar()
-        _entry(row, self.v_kick_reason, 20)
-        _action(row, "Kick", self._on_kick, "danger")
-        _action(row, "Kill", self._on_kill, "danger")
-        _action(row, "God Mode On", lambda: self._on_god_mode(True))
-        _action(row, "God Mode Off", lambda: self._on_god_mode(False))
-        self._say_moderate = _status(parent)
+        form_entry(row, self.v_kick_reason, 20)
+        form_button(row, "Kick", self._on_kick, "danger")
+        form_button(row, "Kill", self._on_kill, "danger")
+        form_button(row, "God Mode On", lambda: self._on_god_mode(True))
+        form_button(row, "God Mode Off", lambda: self._on_god_mode(False))
+        self._say_moderate = status_line(parent)
 
         _section_label(parent, "MESSAGE")
-        row = _row(parent)
+        row = form_row(parent)
         self.v_admin_message = tk.StringVar()
-        _entry(row, self.v_admin_message, 34)
-        _text(row, "Seconds:")
+        form_entry(row, self.v_admin_message, 34)
+        form_text(row, "Seconds:")
         self.v_admin_duration = tk.StringVar(value="5")
-        _entry(row, self.v_admin_duration, 5)
-        _action(row, "Send Message", self._on_message, "primary")
-        _action(row, "Send to All", lambda: self._on_message(everyone=True))
-        self._say_message = _status(parent)
+        form_entry(row, self.v_admin_duration, 5)
+        form_button(row, "Send Message", self._on_message, "primary")
+        form_button(row, "Send to All", lambda: self._on_message(everyone=True))
+        self._say_message = status_line(parent)
 
         _section_label(parent, "TELEPORT")
-        row = _row(parent)
-        _text(row, "To a player:")
+        row = form_row(parent)
+        form_text(row, "To a player:")
         self.v_teleport_target = tk.StringVar()
-        self._teleport_combo = _combo(row, self.v_teleport_target, editable=True,
+        self._teleport_combo = form_combo(row, self.v_teleport_target, editable=True,
                                       postcommand=self._fill_teleport_players)
-        _action(row, "Teleport to Player", self._on_teleport, "primary")
-        row = _row(parent)
-        _text(row, "To a place:")
+        form_button(row, "Teleport to Player", self._on_teleport, "primary")
+        row = form_row(parent)
+        form_text(row, "To a place:")
         self.v_teleport_place = tk.StringVar(value=_place_label(PLACES[0]))
-        _combo(row, self.v_teleport_place, [_place_label(p) for p in PLACES])
-        _action(row, "Teleport to Place", self._on_teleport_place, "primary")
-        self._say_teleport = _status(parent)
+        form_combo(row, self.v_teleport_place, [_place_label(p) for p in PLACES])
+        form_button(row, "Teleport to Place", self._on_teleport_place, "primary")
+        self._say_teleport = status_line(parent)
 
         _section_label(parent, "HOME")
-        row = _row(parent)
+        row = form_row(parent)
         self._home_readout = tk.Label(row, text="", bg=BG, fg=PARCH, font=("Consolas", 10))
         self._home_readout.pack(side="left", padx=(0, 12))
-        _action(row, "Set Home Here", self._on_set_home_here, "primary")
-        _action(row, "Clear Home", self._on_clear_home)
-        self._say_home = _status(parent)
+        form_button(row, "Set Home Here", self._on_set_home_here, "primary")
+        form_button(row, "Clear Home", self._on_clear_home)
+        self._say_home = status_line(parent)
 
         _section_label(parent, "STATS")
-        row = _row(parent)
+        row = form_row(parent)
         self.v_stat = tk.StringVar()
-        self._stat_combo = _combo(row, self.v_stat, width=24)
+        self._stat_combo = form_combo(row, self.v_stat, width=24)
         self._stat_combo.bind("<<ComboboxSelected>>", self._on_stat_picked)
-        _action(row, "Refresh Stats", self._on_refresh_stats)
+        form_button(row, "Refresh Stats", self._on_refresh_stats)
         self._stat_readout = tk.Label(row, text="", bg=BG, fg=PARCH, font=("Consolas", 9))
         self._stat_readout.pack(side="left", padx=(6, 0))
-        row = _row(parent)
-        _text(row, "Set")
+        row = form_row(parent)
+        form_text(row, "Set")
         self.v_stat_mode = tk.StringVar(value=STAT_MODES[0])
-        mode = _combo(row, self.v_stat_mode, STAT_MODES, width=6)
+        mode = form_combo(row, self.v_stat_mode, STAT_MODES, width=6)
         mode.bind("<<ComboboxSelected>>", lambda e: self._show_stat(prefill=True))
-        _text(row, "to")
+        form_text(row, "to")
         self.v_stat_value = tk.StringVar()
-        _entry(row, self.v_stat_value, 8)
-        _action(row, "Set Stat", self._on_set_stat, "primary")
-        row = _row(parent)
-        _text(row, "Buff by")
+        form_entry(row, self.v_stat_value, 8)
+        form_button(row, "Set Stat", self._on_set_stat, "primary")
+        row = form_row(parent)
+        form_text(row, "Buff by")
         self.v_buff_value = tk.StringVar(value="1")
-        _entry(row, self.v_buff_value, 6)
-        _text(row, "for")
+        form_entry(row, self.v_buff_value, 6)
+        form_text(row, "for")
         self.v_buff_seconds = tk.StringVar(value="30")
-        _entry(row, self.v_buff_seconds, 6)
-        _text(row, "seconds")
+        form_entry(row, self.v_buff_seconds, 6)
+        form_text(row, "seconds")
         self.v_buff_multiply = tk.BooleanVar(value=False)
         tk.Checkbutton(row, text="Multiply", variable=self.v_buff_multiply, bg=BG, fg=PARCH,
                        selectcolor=SURF, activebackground=BG, activeforeground=PARCH,
                        font=("Segoe UI", 9), bd=0).pack(side="left", padx=(0, 8))
-        _action(row, "Apply Buff", self._on_buff, "primary")
-        self._say_stats = _status(parent)
+        form_button(row, "Apply Buff", self._on_buff, "primary")
+        self._say_stats = status_line(parent)
 
         _section_label(parent, "PROGRESSION")
-        row = _row(parent)
+        row = form_row(parent)
         self.v_path = tk.StringVar(value=PATHS[0])
-        _combo(row, self.v_path, PATHS, width=14)
-        _text(row, "XP:")
+        form_combo(row, self.v_path, PATHS, width=14)
+        form_text(row, "XP:")
         self.v_path_xp = tk.StringVar(value="100")
-        _entry(row, self.v_path_xp, 8)
-        _action(row, "Give XP", self._on_give_xp, "primary")
-        _action(row, "Level Up", self._on_level_up)
-        self._say_progress = _status(parent)
+        form_entry(row, self.v_path_xp, 8)
+        form_button(row, "Give XP", self._on_give_xp, "primary")
+        form_button(row, "Level Up", self._on_level_up)
+        self._say_progress = status_line(parent)
 
         _section_label(parent, "INVENTORY")
-        row = _row(parent)
-        _action(row, "Show Inventory", self._on_show_inventory)
-        self._say_inventory = _status(parent)
+        row = form_row(parent)
+        form_button(row, "Show Inventory", self._on_show_inventory)
+        self._say_inventory = status_line(parent)
         frame = tk.Frame(parent, bg=SURF)
         frame.pack(fill="x", padx=20, pady=(0, 4))
         self._inventory_text = tk.Text(frame, bg=SURF2, fg=PARCH, font=("Consolas", 9), height=6, width=40,
@@ -211,57 +158,20 @@ class PlayersTabMixin:
         self._inventory_text.pack(fill="x")
 
         _section_label(parent, "ATM")
-        row = _row(parent)
+        row = form_row(parent)
         self._atm_readout = tk.Label(row, text="", bg=BG, fg=PARCH, font=("Consolas", 10))
         self._atm_readout.pack(side="left", padx=(0, 12))
-        _action(row, "Get Balance", lambda: self._on_atm("get"))
-        _text(row, "Amount:")
+        form_button(row, "Get Balance", lambda: self._on_atm("get"))
+        form_text(row, "Amount:")
         self.v_atm_amount = tk.StringVar(value="0")
-        _entry(row, self.v_atm_amount, 8)
-        _action(row, "Set Balance", lambda: self._on_atm("set"), "primary")
-        _action(row, "Add to Balance", lambda: self._on_atm("add"), "primary")
-        self._say_atm = _status(parent)
+        form_entry(row, self.v_atm_amount, 8)
+        form_button(row, "Set Balance", lambda: self._on_atm("set"), "primary")
+        form_button(row, "Add to Balance", lambda: self._on_atm("add"), "primary")
+        self._say_atm = status_line(parent)
 
         self.api.on_target_changed(self._players_refresh)
         self.api.on_connected(self._players_refresh)
         self._nb.bind("<<NotebookTabChanged>>", self._players_refresh, add="+")
-
-    # Sending, and saying how it went
-
-    def _p_answer(self, label, done, then=None, color=GREEN):
-        def on_result(result):
-            if result.timed_out:
-                _say(label, "No answer from the server.", RED)
-            elif result.error:
-                _say(label, _error_text(result.error), RED)
-            else:
-                _say(label, done, color)
-                if then:
-                    then()
-        return on_result
-
-    def _p_send(self, cmd, label, done, then=None, target=None):
-        """Sends a write. PlayerList commands answer Success even when nobody
-        matched, so a target who isn't online gets a warning instead of a done."""
-        color = GREEN
-        if target is not None and self.models.roster.find(target) is None:
-            done = f"Sent, but {target} isn't online, so nothing may have happened."
-            color = AMBER
-        _say(label, "Sending...")
-        self._run_command(cmd, self._p_answer(label, done, then, color), output=False)
-
-    @staticmethod
-    def _p_number(var, label, what, kind=float):
-        try:
-            return kind(var.get().strip())
-        except ValueError:
-            _say(label, f"Enter a number for {what}.", RED)
-            return None
-
-    @staticmethod
-    def _q_text(text):
-        """Free text as one console argument. Quotes and backslashes would end it early."""
-        return '"' + text.replace("\\", "/").replace('"', "'") + '"'
 
     def _target_name(self):
         return self.v_target.get().strip()
@@ -294,7 +204,7 @@ class PlayersTabMixin:
         self._write_inventory("")
         for label in (self._say_moderate, self._say_message, self._say_teleport, self._say_home,
                       self._say_stats, self._say_progress, self._say_inventory, self._say_atm):
-            _say(label, "")
+            say(label, "")
 
     def _read_home(self, target):
         def got(result):
@@ -315,7 +225,7 @@ class PlayersTabMixin:
                 return
             if not result.ok or not isinstance(result.value, list):
                 if label is not None:
-                    self._p_answer(label, "")(result)
+                    self._answer_on(label, "")(result)
                 return
             self._stat_rows = {r["Name"]: r for r in result.value if isinstance(r, dict) and r.get("Name")}
             self._stat_combo["values"] = list(self._stat_rows)
@@ -375,20 +285,20 @@ class PlayersTabMixin:
         cmd = f"player kick {self._q_target(target)}"
         if reason:
             cmd += f" {self._q_text(reason)}"
-        self._p_send(cmd, self._say_moderate, f"Kicked {target}.",
+        self._send_and_say(cmd, self._say_moderate, f"Kicked {target}.",
                      then=lambda: self.after(800, lambda: self._refresh_players(quiet=True)), target=target)
 
     def _on_kill(self):
         target = self._current_target()
         if not target or not confirm(self, "Kill player", f"Kill {target}?"):
             return
-        self._p_send(f"player kill {self._q_target(target)}", self._say_moderate, f"Killed {target}.", target=target)
+        self._send_and_say(f"player kill {self._q_target(target)}", self._say_moderate, f"Killed {target}.", target=target)
 
     def _on_god_mode(self, on):
         target = self._current_target()
         if not target:
             return
-        self._p_send(f"player god-mode {self._q_target(target)} {'true' if on else 'false'}", self._say_moderate,
+        self._send_and_say(f"player god-mode {self._q_target(target)} {'true' if on else 'false'}", self._say_moderate,
                      f"God mode {'on' if on else 'off'} for {target}. The server can't report this back.",
                      target=target)
 
@@ -398,17 +308,17 @@ class PlayersTabMixin:
         label = self._say_message
         text = self.v_admin_message.get().strip()
         if not text:
-            _say(label, "Type a message first.", RED)
+            say(label, "Type a message first.", RED)
             return
-        duration = self._p_number(self.v_admin_duration, label, "the seconds")
+        duration = read_number(self.v_admin_duration, label, "the seconds")
         if duration is None:
             return
         if everyone:
-            self._p_send(f"player message * {self._q_text(text)} {duration}", label, "Sent to everyone.")
+            self._send_and_say(f"player message * {self._q_text(text)} {duration}", label, "Sent to everyone.")
             return
         target = self._current_target()
         if target:
-            self._p_send(f"player message {self._q_target(target)} {self._q_text(text)} {duration}", label,
+            self._send_and_say(f"player message {self._q_target(target)} {self._q_text(text)} {duration}", label,
                          f"Sent to {target}.", target=target)
 
     # Teleport
@@ -423,9 +333,9 @@ class PlayersTabMixin:
             return
         dest = self.v_teleport_target.get().strip()
         if not dest:
-            _say(label, "Pick a player to teleport to.", RED)
+            say(label, "Pick a player to teleport to.", RED)
             return
-        self._p_send(f"player teleport {self._q_target(target)} {self._q_target(dest)}", label,
+        self._send_and_say(f"player teleport {self._q_target(target)} {self._q_target(dest)}", label,
                      f"Teleported {target} to {dest}.", target=target)
 
     def _on_teleport_place(self):
@@ -433,7 +343,7 @@ class PlayersTabMixin:
         if not target:
             return
         place = self.v_teleport_place.get()
-        self._p_send(f"player teleport {self._q_target(target)} {place.replace(' ', '')}", self._say_teleport,
+        self._send_and_say(f"player teleport {self._q_target(target)} {place.replace(' ', '')}", self._say_teleport,
                      f"Teleported {target} to {place}.", target=target)
 
     # Home
@@ -448,18 +358,18 @@ class PlayersTabMixin:
         def got(result):
             position = result.value.get("Position") if result.ok and isinstance(result.value, dict) else None
             if position is None:
-                self._p_answer(label, "Couldn't read where they are.", color=RED)(result)
+                self._answer_on(label, "Couldn't read where they are.", color=RED)(result)
                 return
             spot = ",".join(f"{v:.3f}" for v in position)
-            self._p_send(f"player set-home {q} {spot}", label, "Home set to where they are now.",
+            self._send_and_say(f"player set-home {q} {spot}", label, "Home set to where they are now.",
                          then=lambda: self._read_home(target))
-        _say(label, "Sending...")
+        say(label, "Sending...")
         self._run_command(f"player detailed {q}", got, output=False)
 
     def _on_clear_home(self):
         target = self._current_target()
         if target:
-            self._p_send(f"player set-home {self._q_target(target)}", self._say_home, "Home cleared.",
+            self._send_and_say(f"player set-home {self._q_target(target)}", self._say_home, "Home cleared.",
                          then=lambda: self._read_home(target), target=target)
 
     # Stats
@@ -476,12 +386,12 @@ class PlayersTabMixin:
             return
         stat, mode = self.v_stat.get(), self.v_stat_mode.get()
         if not stat:
-            _say(label, "Pick a stat first.", RED)
+            say(label, "Pick a stat first.", RED)
             return
-        value = self._p_number(self.v_stat_value, label, "the new value")
+        value = read_number(self.v_stat_value, label, "the new value")
         if value is None:
             return
-        self._p_send(f"player set-stat {self._q_target(target)} {stat} {value} {mode}", label,
+        self._send_and_say(f"player set-stat {self._q_target(target)} {stat} {value} {mode}", label,
                      f"{stat} {mode} set to {_number(value)}.",
                      then=lambda: self._read_stats(target, prefill=False), target=target)
 
@@ -492,14 +402,14 @@ class PlayersTabMixin:
             return
         stat = self.v_stat.get()
         if not stat:
-            _say(label, "Pick a stat first.", RED)
+            say(label, "Pick a stat first.", RED)
             return
-        value = self._p_number(self.v_buff_value, label, "the buff")
-        seconds = None if value is None else self._p_number(self.v_buff_seconds, label, "the seconds")
+        value = read_number(self.v_buff_value, label, "the buff")
+        seconds = None if value is None else read_number(self.v_buff_seconds, label, "the seconds")
         if seconds is None:
             return
         multiply = "true" if self.v_buff_multiply.get() else "false"
-        self._p_send(f"player modify-stat {self._q_target(target)} {stat} {value} {seconds} {multiply}", label,
+        self._send_and_say(f"player modify-stat {self._q_target(target)} {stat} {value} {seconds} {multiply}", label,
                      f"Buffed {stat} for {_number(seconds)} seconds.",
                      then=lambda: self._read_stats(target, prefill=False), target=target)
 
@@ -510,18 +420,18 @@ class PlayersTabMixin:
         target = self._current_target()
         if not target:
             return
-        xp = self._p_number(self.v_path_xp, label, "the XP", int)
+        xp = read_number(self.v_path_xp, label, "the XP", int)
         if xp is None:
             return
         path = self.v_path.get()
-        self._p_send(f"player progression pathxp {self._q_target(target)} {path} {xp}", label,
+        self._send_and_say(f"player progression pathxp {self._q_target(target)} {path} {xp}", label,
                      f"Gave {target} {xp} {path} XP.", target=target)
 
     def _on_level_up(self):
         target = self._current_target()
         if target:
             path = self.v_path.get()
-            self._p_send(f"player progression pathlevelup {self._q_target(target)} {path}", self._say_progress,
+            self._send_and_say(f"player progression pathlevelup {self._q_target(target)} {path}", self._say_progress,
                          f"Levelled {target} up in {path}.", target=target)
 
     # Inventory
@@ -535,11 +445,11 @@ class PlayersTabMixin:
         def got(result):
             if result.ok and isinstance(result.value, list) and result.value:
                 self._write_inventory(_describe_inventory(result.value[0]))
-                _say(label, "")
+                say(label, "")
             else:
                 self._write_inventory("")
-                self._p_answer(label, "Nothing to show.", color=AMBER)(result)
-        _say(label, "Sending...")
+                self._answer_on(label, "Nothing to show.", color=AMBER)(result)
+        say(label, "Sending...")
         self._run_command(f"player inventory {self._q_target(target)}", got, output=False)
 
     # ATM
@@ -555,13 +465,13 @@ class PlayersTabMixin:
                 if result.ok:
                     balance = result.value if result.value not in (None, "") else result.text
                     self._atm_readout.config(text=f"Balance: {balance}")
-                    _say(label, "")
+                    say(label, "")
                 else:
                     self._atm_readout.config(text="")
-                    self._p_answer(label, "")(result)
-            _say(label, "Sending...")
+                    self._answer_on(label, "")(result)
+            say(label, "Sending...")
             self._run_command(f"trade atm get {q}", got, output=False)
             return
-        amount = self._p_number(self.v_atm_amount, label, "the amount", int)
+        amount = read_number(self.v_atm_amount, label, "the amount", int)
         if amount is not None:
-            self._p_send(f"trade atm {verb} {q} {amount}", label, "Done.", then=lambda: self._on_atm("get"))
+            self._send_and_say(f"trade atm {verb} {q} {amount}", label, "Done.", then=lambda: self._on_atm("get"))

@@ -14,16 +14,19 @@ class Roster:
     def __init__(self):
         self.players = []
         self.positions = {}
+        self.chunks = {}
 
     def update(self, rows):
-        players, positions = [], {}
+        players, positions, chunks = [], {}, {}
         for row in rows:
             name = row.get("Username") or row.get("username") if isinstance(row, dict) else None
             if name and str(name) not in positions:
                 players.append(Player(row.get("Id", row.get("id")), str(name)))
                 positions[str(name)] = row.get("Position")
+                chunks[str(name)] = row.get("Chunk")
         self.players = players
         self.positions = positions
+        self.chunks = chunks
 
     def find(self, name):
         for player in self.players:
@@ -57,3 +60,4 @@ class Models:
         self.selection = Selection()
         self.staged = []  # (label, spawn string) waiting in Save & Load
         self.prefabs = None  # (hash, name) pairs, once fetched
+        self.settings = {}  # the server's settings, as last read

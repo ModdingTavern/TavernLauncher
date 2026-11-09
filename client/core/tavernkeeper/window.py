@@ -1,7 +1,7 @@
 """
 TavernKeeper: native prefab spawn/select/move/settings/admin tool, run on
 a remote-console connection. Core tabs (Spawn, Find & Select, Move &
-Rotate, Server Settings, Save & Load, Players) live in tabs/, as
+Rotate, World, Server, Save & Load, Players) live in tabs/, as
 mixins of the window below; anything else -- e.g. the Macros tab -- comes from an addon
 registering itself through client.core.tavernkeeper.registry, and is
 inserted at the position it asks for without this file needing to know
@@ -29,7 +29,8 @@ from client.core.tavernkeeper.roster import RosterMixin
 from client.core.tavernkeeper.tabs.spawn import SpawnTabMixin
 from client.core.tavernkeeper.tabs.select import SelectTabMixin
 from client.core.tavernkeeper.tabs.move import MoveTabMixin
-from client.core.tavernkeeper.tabs.settings import SettingsTabMixin
+from client.core.tavernkeeper.tabs.world import WorldTabMixin
+from client.core.tavernkeeper.tabs.server import ServerTabMixin
 from client.core.tavernkeeper.tabs.saveload import SaveLoadTabMixin
 from client.core.tavernkeeper.tabs.players import PlayersTabMixin
 
@@ -44,7 +45,8 @@ class TavernKeeperWindow(
     SpawnTabMixin,
     SelectTabMixin,
     MoveTabMixin,
-    SettingsTabMixin,
+    WorldTabMixin,
+    ServerTabMixin,
     SaveLoadTabMixin,
     PlayersTabMixin,
     tk.Toplevel,
@@ -289,6 +291,8 @@ class TavernKeeperWindow(
 
     def _on_close(self):
         self._stop.set()
+        if getattr(self, "_quit_after", None) is not None:
+            self.after_cancel(self._quit_after)
         if hasattr(self, "_roster_after"):
             self.after_cancel(self._roster_after)
         if hasattr(self, "_ws_client") and self._ws_client:
@@ -299,6 +303,7 @@ class TavernKeeperWindow(
 register_tab("spawn", "Spawn", lambda parent, window: window._build_spawn_tab(parent), built_in=True)
 register_tab("select", "Find & Select", lambda parent, window: window._build_select_tab(parent), built_in=True)
 register_tab("move", "Move & Rotate", lambda parent, window: window._build_move_tab(parent), built_in=True)
-register_tab("settings", "Server Settings", lambda parent, window: window._build_settings_tab(parent), built_in=True)
+register_tab("world", "World", lambda parent, window: window._build_world_tab(parent), built_in=True)
+register_tab("settings", "Server", lambda parent, window: window._build_server_tab(parent), built_in=True)
 register_tab("saveload", "Save & Load", lambda parent, window: window._build_saveload_tab(parent), built_in=True)
 register_tab("admin", "Players", lambda parent, window: window._build_players_tab(parent), built_in=True)

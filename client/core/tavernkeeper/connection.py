@@ -6,10 +6,11 @@ import threading
 import tkinter as tk
 
 from tavern_shared.theme import (
-    BG, SURF, BORDER, AMBER, PARCH, MUTED, RED, _btn, _field, _section_label,
+    BG, SURF, BORDER, AMBER, PARCH, MUTED, RED, GREEN, _btn, _field, _section_label,
 )
 from tavern_shared.ws_console_client import WsConsoleClient
 from client.core.tavernkeeper.api import Result
+from client.core.tavernkeeper.widgets import error_text, say
 
 
 class ConnectionMixin:
@@ -174,6 +175,36 @@ class ConnectionMixin:
                 self.after(0, lambda: self._append_log(f"[{cmd} failed: {result.error}]\n", "err"))
             self.after(0, lambda: on_result(result))
         threading.Thread(target=worker, daemon=True).start()
+
+    def _answer_on(self, label, done, then=None, color=GREEN):
+        """A callback that shows how a command went on a status label. A done
+        of None uses the server's own reply."""
+        def on_result(result):
+            if result.timed_out:
+                say(label, "No answer from the server.", RED)
+            elif result.error:
+                say(label, error_text(result.error), RED)
+            else:
+                say(label, result.text if done is None else done, color)
+                if then:
+                    then()
+        return on_result
+
+    def _send_and_say(self, cmd, label, done, then=None, target=None):
+        """Sends a write and answers on a status label. PlayerList commands
+        say Success even when nobody matched, so a target who isn't online
+        gets a warning instead."""
+        color = GREEN
+        if target is not None and self.models.roster.find(target) is None:
+            done = f"Sent, but {target} isn't online, so nothing may have happened."
+            color = AMBER
+        say(label, "Sending...")
+        self._run_command(cmd, self._answer_on(label, done, then, color), output=False)
+
+    @staticmethod
+    def _q_text(text):
+        """Free text as one console argument. Quotes and backslashes would end it early."""
+        return '"' + text.replace("\\", "/").replace('"', "'") + '"'
 
     @staticmethod
     def _q(value):

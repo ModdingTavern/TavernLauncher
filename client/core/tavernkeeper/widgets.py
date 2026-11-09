@@ -1,17 +1,82 @@
 """Small pieces the TavernKeeper tabs and frame share."""
 import math
+import re
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 from tavern_shared.screen_fit import SCROLL_STEP, ScrollArea, wheel_step
-from tavern_shared.theme import BG, SURF, SURF2, BORDER, AMBERDIM, PARCH, MUTED, RED, _btn
+from tavern_shared.theme import (
+    AMBER, AMBERDIM, BG, BORDER, MUTED, PARCH, RED, SURF, SURF2, _btn, _fix_combobox_popdown_colors,
+)
 
 TAB_GAP = 2
+PLAYER_NOT_FOUND = re.compile(r"Player(List)? \w+ : value was null")
 
 
 def confirm(window, title, message):
     """Ask before something that can't be undone. Enter on the dialog means No."""
     return messagebox.askyesno(title, message, icon="warning", default="no", parent=window)
+
+
+def error_text(error):
+    """A server error in plain words."""
+    text = " ".join(re.sub(r"^\[CommandService\.Handle\]\s*", "", error).split())
+    if PLAYER_NOT_FOUND.search(text):
+        return "That player isn't online."
+    if text == "Failed sending request":
+        return "This server can't look up player accounts, so this doesn't work here."
+    return text
+
+
+def form_row(parent):
+    row = tk.Frame(parent, bg=BG)
+    row.pack(fill="x", padx=20, pady=(0, 4))
+    return row
+
+
+def form_text(row, text):
+    tk.Label(row, text=text, bg=BG, fg=PARCH, font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+
+
+def form_entry(row, var, width):
+    entry = tk.Entry(row, textvariable=var, bg=SURF, fg=PARCH, insertbackground=AMBER, relief="flat",
+                     font=("Consolas", 10), bd=4, width=width)
+    entry.pack(side="left", padx=(0, 8))
+    return entry
+
+
+def form_button(row, text, command, style="normal"):
+    font = ("Segoe UI", 9, "bold") if style != "normal" else ("Segoe UI", 9)
+    button = _btn(row, text, command, style, font=font, pady=5, padx=10)
+    button.pack(side="left", padx=(0, 6))
+    return button
+
+
+def form_combo(row, var, values=(), width=18, editable=False, **options):
+    combo = ttk.Combobox(row, textvariable=var, values=values, width=width, font=("Consolas", 10),
+                         style="Tavk.Target.TCombobox", state="normal" if editable else "readonly", **options)
+    combo.pack(side="left", padx=(0, 8))
+    _fix_combobox_popdown_colors(combo, SURF, PARCH, AMBERDIM, "#ffd080")
+    return combo
+
+
+def status_line(parent):
+    label = tk.Label(parent, text="", bg=BG, fg=MUTED, font=("Segoe UI", 8), anchor="w", justify="left",
+                     wraplength=600)
+    label.pack(fill="x", padx=22, pady=(0, 2))
+    return label
+
+
+def say(label, text, color=MUTED):
+    label.config(text=text, fg=color)
+
+
+def read_number(var, label, what, kind=float):
+    try:
+        return kind(var.get().strip())
+    except ValueError:
+        say(label, f"Enter a number for {what}.", RED)
+        return None
 
 
 class _TabStrip(ScrollArea):
