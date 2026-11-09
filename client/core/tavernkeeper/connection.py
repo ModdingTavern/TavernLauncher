@@ -136,7 +136,7 @@ class ConnectionMixin:
 
     def _on_line(self, text):
         """Called by WsConsoleClient for streaming output — display only."""
-        self._append_log(text)
+        self._append_log(text, "err" if text.startswith("Error: ") else "")
 
     # ── Sending ──────────────────────────────────────────────────────────────
 

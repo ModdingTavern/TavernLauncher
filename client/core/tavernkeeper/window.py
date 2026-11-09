@@ -12,14 +12,15 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from tavern_shared.theme import (
-    BG, SURF, SURF2, BORDER, AMBER, AMBERDIM, PARCH, MUTED, GREEN, RED, CYAN, MONO, _btn,
-    _section_label, _mk_scrollbar, _fix_combobox_popdown_colors,
+    BG, SURF, SURF2, BORDER, AMBER, AMBERDIM, PARCH, MUTED, _btn, _mk_scrollbar,
+    _fix_combobox_popdown_colors,
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon
 from client.core.tavernkeeper.registry import register_tab, ordered_tabs, registry
 from tavern_shared.reorder_dialog import ReorderDialog
 from client.core.tavernkeeper.api import TavernKeeperApi, Player
 from client.core.tavernkeeper.connection import ConnectionMixin
+from client.core.tavernkeeper.console_drawer import ConsoleDrawerMixin
 from client.core.tavernkeeper.tabs.spawn import SpawnTabMixin
 from client.core.tavernkeeper.tabs.select import SelectTabMixin
 from client.core.tavernkeeper.tabs.move import MoveTabMixin
@@ -30,6 +31,7 @@ from client.core.tavernkeeper.tabs.admin import AdminTabMixin
 
 class TavernKeeperWindow(
     ConnectionMixin,
+    ConsoleDrawerMixin,
     SpawnTabMixin,
     SelectTabMixin,
     MoveTabMixin,
@@ -124,26 +126,21 @@ class TavernKeeperWindow(
                   background=[("selected",AMBERDIM)],
                   foreground=[("selected","#ffd080")])
 
-        self._tabs_container = tk.Frame(self, bg=BG)
+        self._paned = tk.PanedWindow(self, orient="vertical", bg=BORDER, bd=0, sashwidth=6,
+                                     sashrelief="flat", opaqueresize=True)
+        self._paned.pack(fill="both", expand=True)
+        self._tabs_pane = tk.Frame(self._paned, bg=BG)
+        self._tabs_container = tk.Frame(self._tabs_pane, bg=BG)
         self._tabs_container.pack(fill="both", expand=True, padx=12, pady=(6,6))
-        self._build_tabs_notebook()
-
-        _section_label(self, "CONSOLE OUTPUT")
-        lf = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
-        lf.pack(fill="x", padx=12, pady=(0,12))
-        self.out = tk.Text(lf, bg=SURF, fg="#b09a78", font=MONO, height=6,
-                           relief="flat", bd=0, state="disabled", wrap="word")
-        sb = _mk_scrollbar(lf, self.out.yview)
-        sb.pack(side="right", fill="y")
-        self.out.config(yscrollcommand=sb.set)
-        self.out.pack(side="left", fill="both", expand=True, padx=6, pady=6)
-        for t,c in [("ok",GREEN),("warn",AMBER),("err",RED),("cyan",CYAN)]:
-            self.out.tag_config(t, foreground=c)
+        self._console_drawer = self._build_console_drawer(self._paned)
+        self._paned.add(self._tabs_pane, stretch="always", minsize=120)
+        self._paned.add(self._console_drawer, stretch="never", minsize=110)
         self.api._ui_ready()
+        self._build_tabs_notebook()
 
     def _append_log(self, text, tag=""):
         self.out.config(state="normal")
-        self.out.insert("end", text, tag)
+        self.out.insert("end", text, (tag,) if tag == "err" else (tag, "nonerr") if tag else ("nonerr",))
         self.out.see("end")
         self.out.config(state="disabled")
 
