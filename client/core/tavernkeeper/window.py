@@ -1,7 +1,7 @@
 """
 TavernKeeper: native prefab spawn/select/move/settings/admin tool, run on
 a remote-console connection. Core tabs (Spawn, Find & Select, Move &
-Rotate, Server Settings, Save & Load, Player Admin) live in tabs/, as
+Rotate, Server Settings, Save & Load, Players) live in tabs/, as
 mixins of the window below; anything else -- e.g. the Macros tab -- comes from an addon
 registering itself through client.core.tavernkeeper.registry, and is
 inserted at the position it asks for without this file needing to know
@@ -31,7 +31,7 @@ from client.core.tavernkeeper.tabs.select import SelectTabMixin
 from client.core.tavernkeeper.tabs.move import MoveTabMixin
 from client.core.tavernkeeper.tabs.settings import SettingsTabMixin
 from client.core.tavernkeeper.tabs.saveload import SaveLoadTabMixin
-from client.core.tavernkeeper.tabs.admin import AdminTabMixin
+from client.core.tavernkeeper.tabs.players import PlayersTabMixin
 
 OPEN_SIZE = (1060, 900)
 MIN_SIZE = (900, 640)
@@ -46,7 +46,7 @@ class TavernKeeperWindow(
     MoveTabMixin,
     SettingsTabMixin,
     SaveLoadTabMixin,
-    AdminTabMixin,
+    PlayersTabMixin,
     tk.Toplevel,
 ):
     """A native prefab spawn/select/move/settings/admin tool, on the same
@@ -301,4 +301,4 @@ register_tab("select", "Find & Select", lambda parent, window: window._build_sel
 register_tab("move", "Move & Rotate", lambda parent, window: window._build_move_tab(parent), built_in=True)
 register_tab("settings", "Server Settings", lambda parent, window: window._build_settings_tab(parent), built_in=True)
 register_tab("saveload", "Save & Load", lambda parent, window: window._build_saveload_tab(parent), built_in=True)
-register_tab("admin", "Player Admin", lambda parent, window: window._build_admin_tab(parent), built_in=True)
+register_tab("admin", "Players", lambda parent, window: window._build_players_tab(parent), built_in=True)
