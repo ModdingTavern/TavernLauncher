@@ -11,8 +11,10 @@ def register_launcher_action(key, label, callback):
 def register_before_launch_hook(key, callback):
     """callback(host, game_exe, log_fn), after validation/auth and before Popen.
 
-    Runs in the launch worker for normal and headless joins, including localhost.
-    An optional add-on failure is reported without preventing the game launch.
+    Runs on the launcher's own thread for normal and headless joins, including
+    localhost; not for the main menu. An optional add-on failure is reported
+    without preventing the game launch. launch_hooks.register_launch_hook sees
+    every launch, gets the arguments and the process, and can stop a launch.
     """
     _before_launch[key] = callback
 

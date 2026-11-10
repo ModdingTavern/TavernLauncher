@@ -2,8 +2,10 @@
 The main Client launcher window -- username/platform/destination fields,
 Mods/Patch buttons, Check/Join Server, and the game log panel. Custom
 asset syncing is NOT hardcoded here anymore: _do_launch calls
-run_post_auth_hooks() unconditionally, and addons/custom_models/client.py
-is what actually does anything at that point, if it's part of this build.
+run_post_auth_hooks() after every successful handshake (see launch_hooks
+for the local-server rule), and addons/custom_models/client.py is what
+actually does anything at that point, if it's part of this build. Every
+game start goes through spawn_game(), so launch hooks see all of them.
 """
 import os
 import sys
@@ -47,7 +49,7 @@ from client.core.auth import (
     AUTH_PORT, authenticate, ping_server, _resolve_ip_for_game, _valid_port,
     build_tokens, _headless_user_id, register_whitelist_application, ticket_request,
 )
-from client.core.launch_hooks import run_post_auth_hooks
+from client.core.launch_hooks import run_post_auth_hooks, run_launch_hooks, LaunchContext
 from client.core.addon_hooks import build_launcher_actions, run_before_launch_hooks
 from client.core.community_browser import CommunityBrowser
 from client.core.server_list_panel import ServerListPanel
@@ -986,19 +988,14 @@ class ClientLauncher(tk.Tk):
             return
 
         self._print(f"Welcomed as {username} (ID {user_id})", "ok")
-        # Skipped for localhost specifically: this resync clears and
-        # repopulates the flat CustomAssets/ folder that TavernLib reads
-        # from, regardless of whether the game process it's running inside
-        # is acting as your server or as a client -- there's no per-role
-        # distinction at that level. If you're hosting your own server AND
-        # joining it from the same machine, this resync was touching the
-        # exact same folder your own server process depends on, and could
-        # race with it (briefly empty/incomplete right as the server
-        # itself starts up and does its own one-time scan). A local server
-        # owner's folder is already exactly what's needed -- there's
-        # nothing to download from yourself over the network.
-        if host not in ("127.0.0.1", "localhost", socket.gethostname()):
-            run_post_auth_hooks(host, self._print)
+        # Hooks written as fn(host, log_fn) are still skipped for localhost:
+        # custom_models' resync clears and repopulates the flat CustomAssets/
+        # folder that TavernLib reads from, whether the game process is your
+        # server or a client. Hosting and joining from the same machine, that
+        # resync raced the server's own one-time scan of the same folder.
+        # A hook that takes is_local runs here too and decides for itself.
+        is_local = host in ("127.0.0.1", "localhost", socket.gethostname())
+        run_post_auth_hooks(host, self._print, is_local=is_local)
         self._show_token_button()
         if token_is_new and not had_token_before:
             # The very first token file this launcher has ever created on this
@@ -1041,17 +1038,7 @@ class ClientLauncher(tk.Tk):
             args.append(scene_arg)
 
         self._print(f"Launching on {platform or 'default'}…", "warn")
-        try:
-            # Whether MelonLoader's own console window shows up is controlled
-            # by the Show MelonLoader toggle: hiding it means redirecting the
-            # child's std handles at creation time (which is what makes it
-            # skip AllocConsole); showing it means leaving them alone.
-            run_before_launch_hooks(host, exe, self._print)
-            proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
-                                    **self._popen_console_kwargs())
-            self._print(f"Game running (PID {proc.pid})", "ok")
-        except Exception as e:
-            self._print(f"Launch failed: {e}", "err")
+        self.spawn_game("join", args, host=host, port=_valid_port(self.v_port.get()), label=sv_name)
         self._action_btn.config(state="normal")
 
     def _do_launch_headless(self):
@@ -1112,13 +1099,7 @@ class ClientLauncher(tk.Tk):
             args.append("/debug_helper")
 
         self._print(f"Launching on {platform or 'default'}…", "warn")
-        try:
-            run_before_launch_hooks(host, exe, self._print)
-            proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
-                                    **self._popen_console_kwargs())
-            self._print(f"Game running (PID {proc.pid})", "ok")
-        except Exception as e:
-            self._print(f"Launch failed: {e}", "err")
+        self.spawn_game("headless", args, host=host, port=_valid_port(self.v_port.get()), label=host)
         self._action_btn.config(state="normal")
 
     def _refresh_menu_btn(self):
@@ -1180,9 +1161,33 @@ class ClientLauncher(tk.Tk):
             args.append("/debug_helper")
 
         self._print(f"Launching main menu on {platform or 'default'}...", "warn")
+        self.spawn_game("menu", args, label="Main menu", what="Menu")
+
+    def spawn_game(self, kind, argv, host=None, port=None, label=None, what="Game"):
+        """Starts the game from argv (argv[0] is the exe) and returns the
+        process, or None if it didn't start. Every launch goes through here
+        so launch hooks see it; an addon that starts the game itself should
+        call this too, with its own kind (e.g. "solo")."""
+        platform = self.v_platform.get().strip()
+        ctx = LaunchContext(kind, argv, host=host, port=port, label=label,
+                            user=self.v_username.get().strip(),
+                            platform=PLATFORM_DISPLAY_TO_BACKEND.get(platform, platform))
+        if kind in ("join", "headless"):
+            run_before_launch_hooks(host, argv[0], self._print)
+        run_launch_hooks("before", ctx, self._print)
+        if ctx.cancelled:
+            self._print(f"Launch stopped: {ctx.cancelled}", "warn")
+            return None
         try:
-            proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
-                                    **self._popen_console_kwargs())
-            self._print(f"Menu running (PID {proc.pid})", "ok")
+            # Whether MelonLoader's own console window shows up is controlled
+            # by the Show MelonLoader toggle: hiding it means redirecting the
+            # child's std handles at creation time (which is what makes it
+            # skip AllocConsole); showing it means leaving them alone.
+            ctx.proc = subprocess.Popen(ctx.argv, cwd=os.path.dirname(ctx.argv[0]),
+                                        **self._popen_console_kwargs())
         except Exception as e:
-            self._print(f"Menu launch failed: {e}", "err")
+            self._print(f"{'Launch' if what == 'Game' else what + ' launch'} failed: {e}", "err")
+            return None
+        self._print(f"{what} running (PID {ctx.proc.pid})", "ok")
+        run_launch_hooks("after", ctx, self._print)
+        return ctx.proc
