@@ -173,7 +173,7 @@ This section explains what the port range does per port.
 | 1757 | UDP | GamePort | Runs all the communication of your clients to your server and is the backbone of all network syncing. Hard requirement. |
 | 1758 | TCP | ServerConsolePort | Legacy port used for server console, repurposed to port 1762. Now obsolete. |
 | 1759 | TCP | ServerLoggingPort | Legacy port used for server logging, repurposed to port 1762. Now obsolete. |
-| 1760 | TCP | WebsocketPort | Legacy port used for web socket commands, repurposed to port 1762. Now obsolete. |
+| 1760 | TCP | WebsocketPort | The server console. TavernKeeper and the Remote Console connect here with the console token. Optional: only needed to use them from outside your network. |
 | 1761 | TCP | WebServerThread | Sends the terrain data cache of the forest to your clients. Without this port clients will not be able to render the terrain of the forest on your server. While not a hard requirement, it kind of is. |
 | 1762 | TCP | auth-overlay | A homebrew addon port for The Modding Tavern. This runs the authentication and security protocols for your server. Also a hard requirement. |
 
