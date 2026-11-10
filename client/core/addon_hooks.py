@@ -5,7 +5,9 @@ mods (row "mods"); saved, community, tickets, remote_console and
 tavernkeeper (row "servers"); check, join and menu (the main row). An
 addon's own key works as an after= target for the next addon.
 launcher.button(key) returns any of these buttons once the window exists.
+register_app_ready(fn) calls fn(launcher) once the window is fully built.
 """
+from tavern_shared.app_ready import register_app_ready  # noqa: F401  (re-exported for addons)
 _actions = {}
 _main_buttons = {}
 _before_launch = {}

@@ -3,7 +3,8 @@ Client launcher entry point. Loads whichever addons the user has
 actually enabled (see the in-app Addons window / client/core/
 addon_loader.py) BEFORE building the main window, so every enabled
 addon has already registered its tabs/hooks by the time
-ClientLauncher._build_main_ui() runs.
+ClientLauncher._build_ui() runs. Hooks that need the finished window use
+tavern_shared.app_ready.register_app_ready.
 
 Addons are no longer baked in at build time -- this .exe is always
 "core only"; addons/ is a plain folder of .py files expected to sit

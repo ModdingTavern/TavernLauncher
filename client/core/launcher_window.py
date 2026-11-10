@@ -50,6 +50,7 @@ from client.core.auth import (
     build_tokens, _headless_user_id, register_whitelist_application, ticket_request,
 )
 from client.core.launch_hooks import run_post_auth_hooks, run_launch_hooks, LaunchContext
+from tavern_shared.app_ready import run_app_ready
 from client.core.addon_hooks import build_launcher_actions, run_before_launch_hooks
 from client.core.community_browser import CommunityBrowser
 from client.core.server_list_panel import ServerListPanel
@@ -106,6 +107,7 @@ class ClientLauncher(tk.Tk):
         self._load()
         _finish_dark_window(self)
         attach_help_tab(self)
+        run_app_ready(self, self._print)
 
     def deiconify(self):
         self._screen_fit.fit_once()

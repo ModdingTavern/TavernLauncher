@@ -33,6 +33,7 @@ from tavern_shared.patch import _patch_source_path, _patch_is_applied, apply_pat
 from tavern_shared.mods_window import ModsWindow
 from tavern_shared.log_archive import archive_log_now, should_auto_archive
 from tavern_shared.ws_console_client import WsConsoleClient
+from tavern_shared.app_ready import run_app_ready
 
 from server.core.data_store import (
     load_cfg, save_cfg, CONFIG_FILE, GAME_LOG_PATH, DISCORD_URL,
@@ -99,6 +100,7 @@ class ServerLauncher(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _finish_dark_window(self)
         attach_help_tab(self)
+        run_app_ready(self, self._print)
         self.after(0, self._adopt_left_running)
 
     def _adopt_left_running(self):
@@ -295,7 +297,7 @@ class ServerLauncher(tk.Tk):
                              activebackground=AMBERDIM, activeforeground="#ffd080",
                              relief="flat", bd=0, cursor="hand2",
                              font=("Segoe UI",9), padx=10, pady=4,
-                             command=getattr(self, b["command_attr"]))
+                             command=self._header_command(b))
             item = canvas.create_window(0, 32, anchor="e", window=btn)
             self._header_widgets[b["key"]] = btn
             self._header_items[b["key"]] = item
@@ -309,6 +311,17 @@ class ServerLauncher(tk.Tk):
 
         canvas.bind("<Configure>", self._on_header_resize)
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x")
+
+    def _header_command(self, b):
+        if b.get("command") is None:
+            return getattr(self, b["command_attr"])
+
+        def run():
+            try:
+                b["command"](self)
+            except Exception as e:
+                self._print(f"[{b['key']}] {e}", "err")
+        return run
 
     def _open_discord(self):
         webbrowser.open(DISCORD_URL)
