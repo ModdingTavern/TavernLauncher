@@ -45,6 +45,7 @@ from server.core.auth_service import (
     start_auth_service, AUTH_PORT, build_console_token, build_server_tokens,
 )
 from server.core.console_window import ConsoleWindow
+from server.core.server_process import remember, forget, left_running, console_port_free
 from server.core.tickets_window import TicketsWindow
 from server.core.player_manager import PlayerManagerWindow
 from server.core.server_settings import ServerSettingsWindow
@@ -98,6 +99,23 @@ class ServerLauncher(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _finish_dark_window(self)
         attach_help_tab(self)
+        self.after(0, self._adopt_left_running)
+
+    def _adopt_left_running(self):
+        """A server the last launcher started and never stopped gets its
+        login service back and is stopped like any other."""
+        proc = left_running()
+        if not proc:
+            return
+        self._proc = proc
+        if not self._auth_on:
+            start_auth_service(self._print)
+            self._auth_on = True
+        self._set_running(True)
+        self._print(f"The server from last time is still running (PID {proc.pid}). "
+                    "This launcher has taken it back over.", "ok")
+        self._schedule_auto_reboot()
+        self._schedule_backups()
 
     def deiconify(self):
         self._screen_fit.fit_once()
@@ -674,7 +692,7 @@ class ServerLauncher(tk.Tk):
                     self._print(f"Log archived to {result2}", "ok")
                 else:
                     self._print(f"Couldn't archive log even after stopping the server: {result2}", "err")
-                self._start()
+                self._start_when_console_free()
 
             self._stop(then=lambda: self.after(500, do_archive_then_restart))
 
@@ -707,6 +725,10 @@ class ServerLauncher(tk.Tk):
     def _start(self):
         if getattr(self, "_stopping", False) or (self._proc and self._proc.poll() is None):
             self._print("The server is still running.", "warn")
+            return
+        if not console_port_free():
+            self._print("Port 1760 is in use, so another server is still running on this PC. "
+                        "Close it first (Task Manager: A Township Tale).", "err")
             return
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
@@ -761,6 +783,7 @@ class ServerLauncher(tk.Tk):
             self._proc = subprocess.Popen(args, cwd=os.path.dirname(exe), **kwargs)
         except Exception as e:
             self._print(f"Failed: {e}", "err"); return
+        remember(self._proc.pid, exe)
         self._set_running(True)
         self._print(f"Server running (PID {self._proc.pid})", "ok")
         threading.Thread(target=self._watch, args=(self._proc,), daemon=True).start()
@@ -778,6 +801,7 @@ class ServerLauncher(tk.Tk):
         if proc.poll() is None:
             self._print("Server ready. Players may connect.", "ok")
         else:
+            forget()
             self._print("Server exited unexpectedly.", "err")
             self.after(0, lambda: self._set_running(False))
 
@@ -856,13 +880,24 @@ class ServerLauncher(tk.Tk):
         self._stopping = False
         if self._proc is proc:
             self._proc = None
+        forget()
         self._set_running(False)
         self._print("Server stopped.", "ok")
         if reboot:
             self._print("Auto-reboot: starting it again…", "warn")
-            self._start()
+            self._start_when_console_free()
         if then:
             then()
+
+    def _start_when_console_free(self, tries=30):
+        """After a forced stop Windows can hold the console port a few
+        seconds more; wait up to 15 s for it rather than refuse."""
+        if tries <= 0 or console_port_free():
+            self._start()
+            return
+        if tries == 30:
+            self._print("Waiting for port 1760 to be released…", "dim")
+        self.after(500, lambda: self._start_when_console_free(tries - 1))
 
     def _schedule_auto_reboot(self):
         """Called once after server starts. Cancels any existing schedule,
@@ -967,9 +1002,11 @@ class ServerLauncher(tk.Tk):
             return
         if self._proc and self._proc.poll() is None:
             if messagebox.askyesno("Server running",
-                                   "Stop the server before closing?", parent=self):
+                    "The server is still running. Save and stop it, then close the launcher?\n\n"
+                    "No keeps the launcher open: nobody can log in to the server without it.",
+                    parent=self):
                 self._stop(then=self.destroy)
-                return
+            return
         self.destroy()
 
 

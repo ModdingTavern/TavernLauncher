@@ -342,8 +342,19 @@ def start_auth_service(log_fn, port=AUTH_PORT):
     def serve():
         try:
             s = socket.socket()
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("0.0.0.0", port)); s.listen(8)
+            # SO_REUSEADDR on Windows let a second launcher bind the same port
+            # without an error; exclusive makes the second one fail instead.
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("0.0.0.0", port))
+            except OSError:
+                log_fn(f"Port {port} is in use: another launcher or server already has it, "
+                       "so players can't log in through this one.", "err")
+                return
+            s.listen(8)
             log_fn(f"Auth service listening on :{port}", "dim")
             while True:
                 conn, addr = s.accept()
