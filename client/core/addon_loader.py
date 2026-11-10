@@ -69,6 +69,13 @@ def save_enabled_addon_names(names):
         pass
 
 
+# Addons that are part of the launcher now. Loading one as well would add a second tab.
+BUILT_IN = {
+    "prefabloader": "Prefab Loader is built into TavernKeeper now as its Prefabs tab, so the addon was not loaded. "
+                    "You can delete the addons/prefabloader folder.",
+}
+
+
 def load_enabled_addons(side, log_error):
     """Loads addons/<name>/<side>.py for every enabled addon that has a
     file for this side. Uses normal importlib.import_module (addons/ is
@@ -81,6 +88,9 @@ def load_enabled_addons(side, log_error):
 
     for name in discover_addons():
         if name not in enabled:
+            continue
+        if name in BUILT_IN:
+            log_error(BUILT_IN[name])
             continue
         file_path = os.path.join(d, name, f"{side}.py")
         if not os.path.isfile(file_path):

@@ -70,6 +70,7 @@ class Models:
     def __init__(self):
         self.roster = Roster()
         self.selection = Selection()
-        self.staged = []  # (label, spawn string) waiting in Save & Load
+        self.staged = []  # the Prefabs tab's list: name, string, position, rotation, placed
+        self.placed = []  # what the Prefabs tab spawned or captured: id, name, string, position, rotation
         self.prefabs = None  # (hash, name) pairs, once fetched
         self.settings = {}  # the server's settings, as last read

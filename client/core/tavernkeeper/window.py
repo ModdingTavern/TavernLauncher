@@ -1,7 +1,7 @@
 """
 TavernKeeper: native prefab spawn/select/move/settings/admin tool, run on
 a remote-console connection. Core tabs (Players, World, Build, Server,
-Save & Load) live in tabs/, as
+Prefabs) live in tabs/, as
 mixins of the window below; anything else -- e.g. the Macros tab -- comes from an addon
 registering itself through client.core.tavernkeeper.registry, and is
 inserted at the position it asks for without this file needing to know
@@ -32,7 +32,7 @@ from client.core.tavernkeeper.tabs.select import SelectTabMixin
 from client.core.tavernkeeper.tabs.move import MoveTabMixin
 from client.core.tavernkeeper.tabs.world import WorldTabMixin
 from client.core.tavernkeeper.tabs.server import ServerTabMixin
-from client.core.tavernkeeper.tabs.saveload import SaveLoadTabMixin
+from client.core.tavernkeeper.tabs.prefabs import PrefabsTabMixin
 from client.core.tavernkeeper.tabs.players import PlayersTabMixin
 
 OPEN_SIZE = (1060, 900)
@@ -49,7 +49,7 @@ class TavernKeeperWindow(
     MoveTabMixin,
     WorldTabMixin,
     ServerTabMixin,
-    SaveLoadTabMixin,
+    PrefabsTabMixin,
     PlayersTabMixin,
     tk.Toplevel,
 ):
@@ -306,4 +306,4 @@ register_tab("admin", "Players", lambda parent, window: window._build_players_ta
 register_tab("world", "World", lambda parent, window: window._build_world_tab(parent), built_in=True)
 register_tab("spawn", "Build", lambda parent, window: window._build_build_tab(parent), built_in=True)
 register_tab("settings", "Server", lambda parent, window: window._build_server_tab(parent), built_in=True)
-register_tab("saveload", "Save & Load", lambda parent, window: window._build_saveload_tab(parent), built_in=True)
+register_tab("saveload", "Prefabs", lambda parent, window: window._build_prefabs_tab(parent), built_in=True)
