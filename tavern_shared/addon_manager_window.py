@@ -16,6 +16,10 @@ from tavern_shared.theme import (
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon
 from tavern_shared.addon_manifest import load_addon_manifest, is_dependency_installed
+from tavern_shared.screen_fit import ScrollArea, fit_window
+
+# How each startup result shows under an addon's name.
+_STATE_COLOURS = {"loaded": GREEN, "failed": RED, "built_in": AMBER, "nothing": MUTED}
 
 
 class AddonManagerWindow(tk.Toplevel):
@@ -33,10 +37,12 @@ class AddonManagerWindow(tk.Toplevel):
         self._build()
         _finish_dark_window(self)
         self.update_idletasks()
+        # The list scrolls, so open tall enough for all of it when the
+        # screen has room, and never past the screen when it doesn't.
+        list_extra = self._list.body.winfo_reqheight() - self._list.shell.winfo_reqheight()
         fit_w = max(480, self.winfo_reqwidth())
-        fit_h = max(420, self.winfo_reqheight())
-        self.geometry(f"{fit_w}x{fit_h}")
-        self.minsize(fit_w, fit_h)
+        fit_h = max(420, self.winfo_reqheight() + max(0, list_extra) + 4)
+        fit_window(self, fit_w, fit_h, fit_w, 420)
 
     def _build(self):
         h = tk.Frame(self, bg=SURF, height=44)
@@ -63,12 +69,16 @@ class AddonManagerWindow(tk.Toplevel):
                 bg=BG, fg=MUTED, font=("Segoe UI",8), wraplength=440, justify="left"
             ).pack(anchor="w", padx=20, pady=(0,4))
 
-        body = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
-        body.pack(fill="both", expand=True, padx=16, pady=(0,8))
+        frame = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        frame.pack(fill="both", expand=True, padx=16, pady=(0,8))
+        self._list = ScrollArea(frame, SURF)
+        self._list.shell.pack(fill="both", expand=True)
+        body = self._list.body
 
         available = self._addon_loader.discover_addons()
         enabled = self._addon_loader.load_enabled_addon_names()
         addons_dir = self._addon_loader.addons_dir()
+        results = getattr(self._addon_loader, "LOAD_RESULTS", {})
 
         if not available:
             tk.Label(body, text="No addons found in the addons/ folder next to this program.",
@@ -107,6 +117,8 @@ class AddonManagerWindow(tk.Toplevel):
                                  bg=SURF, fg=(GREEN if found else RED),
                                  font=("Segoe UI",8)).pack(side="left", padx=(0,8))
 
+                self._add_result(text_col, folder_name, results.get(folder_name), folder_name in enabled)
+
         self._status = tk.StringVar(value="")
         tk.Label(self, textvariable=self._status, bg=BG, fg=CYAN,
                  font=("Segoe UI",9), wraplength=440, justify="left"
@@ -114,6 +126,32 @@ class AddonManagerWindow(tk.Toplevel):
 
         _btn(self, "💾 Save (restart required to apply)", self._on_save, "primary",
              font=("Georgia",10,"bold"), pady=10).pack(fill="x", padx=16, pady=(0,16))
+
+    def _add_result(self, parent, name, result, enabled):
+        """What happened to this addon when the launcher started."""
+        if result is None:
+            if enabled:
+                tk.Label(parent, text="Enabled since this start: restart to load it.", bg=SURF, fg=MUTED,
+                         font=("Segoe UI",8), anchor="w").pack(anchor="w", pady=(3,0))
+            return
+        tk.Label(parent, text=result["message"], bg=SURF, fg=_STATE_COLOURS.get(result["state"], MUTED),
+                 font=("Segoe UI",8), anchor="w", justify="left", wraplength=360).pack(anchor="w", pady=(3,0))
+        if not result.get("detail"):
+            return
+        box = tk.Text(parent, bg=BG, fg=PARCH, font=("Consolas",8), relief="flat", height=8,
+                      width=1, wrap="word", bd=4)
+        box.insert("1.0", result["detail"])
+        box.config(state="disabled")
+
+        def toggle():
+            if box.winfo_manager():
+                box.pack_forget()
+                show.config(text="Show error")
+            else:
+                box.pack(anchor="w", fill="x", pady=(3,0), after=show)
+                show.config(text="Hide error")
+        show = _btn(parent, "Show error", toggle, font=("Segoe UI",7), pady=1, padx=6)
+        show.pack(anchor="w", pady=(3,0))
 
     def _on_save(self):
         chosen = {name for name, var in self._vars.items() if var.get()}
