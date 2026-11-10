@@ -169,10 +169,12 @@ class ClientLauncher(tk.Tk):
 
         btn_row_dest = tk.Frame(body, bg=BG)
         btn_row_dest.pack(fill="x", padx=20, pady=(4,0))
-        _btn(btn_row_dest, "⚑ Saved",             self._open_server_list,
-             font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
-        _btn(btn_row_dest, "🌍 Community Servers", self._open_community,
-             font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=6)
+        saved_btn = _btn(btn_row_dest, "⚑ Saved",             self._open_server_list,
+             font=("Segoe UI",9), pady=5, padx=10)
+        saved_btn.pack(side="left")
+        community_btn = _btn(btn_row_dest, "🌍 Community Servers", self._open_community,
+             font=("Segoe UI",9), pady=5, padx=10)
+        community_btn.pack(side="left", padx=6)
         self._tickets_btn = _btn(btn_row_dest, "🎫 Tickets",           self._open_tickets,
              font=("Segoe UI",9), pady=5, padx=10)
         self._tickets_btn.pack(side="left", padx=(0,6))
@@ -180,12 +182,12 @@ class ClientLauncher(tk.Tk):
         start_flashing_button(self._tickets_btn,
             lambda: self._has_unseen_ticket_reply, normal_bg=SURF2, alert_bg=RED)
         threading.Thread(target=self._poll_ticket_replies_loop, daemon=True).start()
-        _btn(btn_row_dest, "🖥 Remote Console",    self._open_remote_console,
-             font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=(0,6))
-        _btn(btn_row_dest, "🧩 TavernKeeper",     self._open_tavernkeeper,
-             font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
-
-        build_launcher_actions(btn_row_dest, self)
+        console_btn = _btn(btn_row_dest, "🖥 Remote Console",    self._open_remote_console,
+             font=("Segoe UI",9), pady=5, padx=10)
+        console_btn.pack(side="left", padx=(0,6))
+        tk_btn = _btn(btn_row_dest, "🧩 TavernKeeper",     self._open_tavernkeeper,
+             font=("Segoe UI",9), pady=5, padx=10)
+        tk_btn.pack(side="left")
 
         # ── Action area ──────────────────────────────────────────────────────
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", padx=20, pady=6)
@@ -208,6 +210,17 @@ class ClientLauncher(tk.Tk):
                                 style="primary", font=("Georgia",12,"bold"), pady=14)
         self._action_btn.pack(side="left", fill="x", expand=True, padx=(4,0))
         self._menu_btn = _btn(action_row, "🏠  Main Menu", self._do_launch_menu, font=("Georgia",12,"bold"), pady=14)
+
+        # Addon buttons go in by key (see addon_hooks), so they never have
+        # to find a built-in button by its text.
+        self._button_rows = {"mods": btn_row_mods, "servers": btn_row_dest, "main": action_row}
+        self._named_buttons = {
+            "patch": self._patch_btn, "mods": self._mods_btn,
+            "saved": saved_btn, "community": community_btn, "tickets": self._tickets_btn,
+            "remote_console": console_btn, "tavernkeeper": tk_btn,
+            "check": self._check_btn, "join": self._action_btn, "menu": self._menu_btn,
+        }
+        build_launcher_actions(self)
 
         # ── Log ───────────────────────────────────────────────────────────────
         log_header = tk.Frame(body, bg=BG)
@@ -254,6 +267,10 @@ class ClientLauncher(tk.Tk):
         self._addons_btn = _btn(df, "🧩 Addons", self._open_addons,
              font=("Segoe UI",7), pady=2, padx=6)
         self._addons_btn.pack(side="right", padx=(0,6))
+
+    def button(self, key):
+        """A launcher button by key, built-in or an addon's (see addon_hooks), or None."""
+        return self._named_buttons.get(key)
 
     def _header(self):
         body = self._screen_fit.body
