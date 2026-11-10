@@ -13,6 +13,7 @@ in client_enabled_addons.json.
 """
 import sys
 import os
+import threading
 import traceback
 
 # So `import tavern_shared`, `import client.core...` all resolve
@@ -45,6 +46,18 @@ def _write_error_log(err_text):
     except Exception:
         pass
 
+
+def _log_thread_exception(args):
+    # A crash in a background thread (ticket polling, a launch, the
+    # console client) otherwise vanishes without a trace in a windowed build.
+    if args.exc_type is SystemExit:
+        return
+    name = args.thread.name if args.thread is not None else "?"
+    _write_error_log(f"Uncaught error in thread {name}:\n" + "".join(
+        traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+
+
+threading.excepthook = _log_thread_exception
 
 from client.core import addon_loader
 addon_loader.load_enabled_addons("client", _write_error_log)

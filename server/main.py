@@ -10,6 +10,7 @@ identical comment on why.
 """
 import sys
 import os
+import threading
 import traceback
 from tkinter import messagebox
 
@@ -38,6 +39,18 @@ def _write_error_log(err_text):
     except Exception:
         pass
 
+
+def _log_thread_exception(args):
+    # A crash in a background thread (the auth service, a stop, a backup)
+    # otherwise vanishes without a trace in a windowed build.
+    if args.exc_type is SystemExit:
+        return
+    name = args.thread.name if args.thread is not None else "?"
+    _write_error_log(f"Uncaught error in thread {name}:\n" + "".join(
+        traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+
+
+threading.excepthook = _log_thread_exception
 
 from server.core import addon_loader
 addon_loader.load_enabled_addons("server", _write_error_log)
