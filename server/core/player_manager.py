@@ -153,8 +153,7 @@ class PlayerManagerWindow(tk.Toplevel):
             _save_bl(bl)
         # Kick live session
         ok, msg = kick_player(uname, ban=True)
-        detail = msg or "Sent ban command."
-        messagebox.showinfo("Banned", f"'{uname}' added to blacklist.\n{detail}", parent=self)
+        messagebox.showinfo("Banned", f"'{uname}' added to blacklist.\n{msg}", parent=self)
 
     def _change_uid(self):
         uname = self._selected_username()
