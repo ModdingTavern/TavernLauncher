@@ -139,7 +139,8 @@ and click "+ Add" to lock in the ban.
 
 If you have enabled the whitelist functionality as mentioned above, nobody will be able to join your server unless they match an entry
 in your whitelist.
-Similar to the blacklist, you can whitelist a username or an IP.
+Similar to the blacklist, you can whitelist a username or an IP. An IP entry lets in every name from that address, so only add one
+for a place where you trust everyone (a VPN or a shared connection can put strangers behind the same IP).
 Optionally, you can also write a comment behind each entry so it's easier for you to remember who exactly a certain IP/Username is.
 
 #### Whitelist Applications
@@ -147,7 +148,8 @@ Optionally, you can also write a comment behind each entry so it's easier for yo
 If you have enabled the whitelist functionality, players can request to join your server. When they try to connect to your server they will
 get a notification that whitelist is enabled. If they are not on that list, they can request access.
 Any request will appear in this list and you are able to approve requests or deny them from here. Approving a request means it will automatically
-insert their username and IP into the whitelist tab.
+insert their username into the whitelist tab, with the IP they applied from as its comment.
+One address can have at most 3 applications waiting, and the list holds at most 100.
 
 ### Tickets
 
