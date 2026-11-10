@@ -32,6 +32,7 @@ from tavern_shared.mod_install import _melonloader_installed, _mods_need_attenti
 from tavern_shared.patch import _patch_source_path, _patch_is_applied, apply_patch
 from tavern_shared.mods_window import ModsWindow
 from tavern_shared.log_archive import archive_log_now, should_auto_archive
+from tavern_shared.ws_console_client import WsConsoleClient
 
 from server.core.data_store import (
     load_cfg, save_cfg, CONFIG_FILE, GAME_LOG_PATH, DISCORD_URL,
@@ -675,18 +676,7 @@ class ServerLauncher(tk.Tk):
                     self._print(f"Couldn't archive log even after stopping the server: {result2}", "err")
                 self._start()
 
-            # _stop() clears self._proc right away, so grab it first.
-            proc_to_wait = self._proc
-            self._stop(reboot=False)
-
-            def wait_for_exit_then_archive():
-                if proc_to_wait is not None:
-                    try:
-                        proc_to_wait.wait(timeout=5)
-                    except Exception:
-                        pass
-                self.after(500, do_archive_then_restart)
-            threading.Thread(target=wait_for_exit_then_archive, daemon=True).start()
+            self._stop(then=lambda: self.after(500, do_archive_then_restart))
 
         self._archive_log_with_tailer_paused(after_pausing_tailer)
 
@@ -715,6 +705,9 @@ class ServerLauncher(tk.Tk):
         self.log.see("end"); self.log.config(state="disabled")
 
     def _start(self):
+        if getattr(self, "_stopping", False) or (self._proc and self._proc.poll() is None):
+            self._print("The server is still running.", "warn")
+            return
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Not found",
@@ -770,7 +763,7 @@ class ServerLauncher(tk.Tk):
             self._print(f"Failed: {e}", "err"); return
         self._set_running(True)
         self._print(f"Server running (PID {self._proc.pid})", "ok")
-        threading.Thread(target=self._watch, daemon=True).start()
+        threading.Thread(target=self._watch, args=(self._proc,), daemon=True).start()
         # Kill a still-pending reboot timer from before this start
         if getattr(self, "_reboot_after_id", None):
             self.after_cancel(self._reboot_after_id)
@@ -778,27 +771,98 @@ class ServerLauncher(tk.Tk):
         self._schedule_auto_reboot()
         self._schedule_backups()
 
-    def _watch(self):
+    def _watch(self, proc):
         time.sleep(8)
-        if self._proc and self._proc.poll() is None:
+        if proc is not self._proc or getattr(self, "_stopping", False):
+            return  # stopped on purpose meanwhile
+        if proc.poll() is None:
             self._print("Server ready. Players may connect.", "ok")
         else:
             self._print("Server exited unexpectedly.", "err")
             self.after(0, lambda: self._set_running(False))
 
-    def _stop(self, reboot=False):
-        # A manual stop
+    STOP_SAVE_TIMEOUT = 120
+    STOP_EXIT_TIMEOUT = 60
+
+    def _stop(self, reboot=False, then=None):
+        """Saves and quits the server through its console, waits for the
+        process to exit, and only kills it if it won't. A kill loses
+        everything since the last save. then() runs once it is gone;
+        reboot starts it again."""
         if getattr(self, "_reboot_after_id", None):
             self.after_cancel(self._reboot_after_id)
             self._reboot_after_id = None
         self._cancel_backups()
-        if self._proc:
-            try: self._proc.terminate(); self._print("Closing server…", "warn")
-            except Exception as e: self._print(f"Stop failed: {e}", "err")
-        self._set_running(False); self._proc = None
+        if getattr(self, "_stopping", False):
+            return
+        proc = self._proc
+        if not proc or proc.poll() is not None:
+            self._proc = None
+            self._set_running(False)
+            if then:
+                then()
+            return
+        self._stopping = True
+        self._status_var.set("Stopping…")
+        self._btn_start.config(state="disabled")
+        self._btn_stop.config(state="disabled")
+        self._print("Saving and closing the server…", "warn")
+        threading.Thread(target=self._stop_worker, args=(proc, reboot, then), daemon=True).start()
+
+    def _stop_worker(self, proc, reboot, then):
+        problem = self._quit_through_console()
+        if problem:
+            self._print(f"Couldn't ask the server to quit: {problem}", "err")
+        else:
+            try:
+                proc.wait(timeout=self.STOP_EXIT_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                self._print(f"The server didn't close within {self.STOP_EXIT_TIMEOUT} s.", "err")
+        if proc.poll() is None:
+            self._print("Forcing it closed. Anything since the last save is lost.", "err")
+            try:
+                proc.terminate()
+                proc.wait(timeout=15)
+            except Exception as e:
+                self._print(f"Stop failed: {e}", "err")
+        self.after(0, lambda: self._stopped(proc, reboot, then))
+
+    def _quit_through_console(self):
+        """None once quit was sent, else why it couldn't be. quit saves the
+        world on its own; save now first is there to report a failed save."""
+        try:
+            with open(CONSOLE_TOKEN_FILE) as f:
+                token = f.read().strip()
+        except Exception:
+            return "console_token.txt not found"
+        ws = WsConsoleClient()
+        ok, msg = ws.connect("127.0.0.1", token)
+        if not ok:
+            return f"the console isn't answering ({msg})"
+        try:
+            r = ws.request("save now", timeout=self.STOP_SAVE_TIMEOUT)
+            if r["error"]:
+                self._print(f"Save failed: {r['error']}. Quitting anyway, which saves too.", "warn")
+            else:
+                self._print("World saved.", "ok")
+            r = ws.request("quit", timeout=15)
+            if r["error"]:
+                self._print(f"quit answered: {r['error']}", "warn")
+            return None
+        finally:
+            ws.disconnect()
+
+    def _stopped(self, proc, reboot, then):
+        self._stopping = False
+        if self._proc is proc:
+            self._proc = None
+        self._set_running(False)
+        self._print("Server stopped.", "ok")
         if reboot:
-            self._print("Auto-reboot: restarting in 10 seconds…", "warn")
-            self.after(10000, self._start)
+            self._print("Auto-reboot: starting it again…", "warn")
+            self._start()
+        if then:
+            then()
 
     def _schedule_auto_reboot(self):
         """Called once after server starts. Cancels any existing schedule,
@@ -898,10 +962,14 @@ class ServerLauncher(tk.Tk):
         self.after(0, _do)
 
     def _on_close(self):
+        if getattr(self, "_stopping", False):
+            self._print("Still closing the server…", "warn")
+            return
         if self._proc and self._proc.poll() is None:
             if messagebox.askyesno("Server running",
                                    "Stop the server before closing?", parent=self):
-                self._stop()
+                self._stop(then=self.destroy)
+                return
         self.destroy()
 
 
