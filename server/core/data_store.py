@@ -9,6 +9,7 @@ import sys
 import re
 import math
 import time
+import datetime
 import json
 import threading
 import hashlib
@@ -424,22 +425,47 @@ def _save_whitelist_requests(requests):
 
 
 def _approve_whitelist_request(index):
-    requests = _load_whitelist_requests()
-    if index < 0 or index >= len(requests):
-        return False
-    req = requests.pop(index)
-    wl = _load_wl()
-    username = (req.get("username") or "").strip()
-    ip = (req.get("ip") or "").strip()
-    if username and username not in wl["usernames"]:
-        wl["usernames"].append(username)
-    if ip and ip not in wl["ips"]:
-        wl["ips"].append(ip)
-    _save_wl(wl)
-    _save_whitelist_requests(requests)
-    if ip and username:
-        _set_whitelist_comment(ip, username)
-    return True
+    """Whitelists the applicant's name only. Their IP goes in the comment:
+    an IP entry would let in every name from that address."""
+    with _users_lock:
+        requests = _load_whitelist_requests()
+        if index < 0 or index >= len(requests):
+            return False
+        req = requests.pop(index)
+        username = (req.get("username") or "").strip()
+        ip = (req.get("ip") or "").strip()
+        if username:
+            wl = _load_wl()
+            if username.lower() not in [u.lower() for u in wl["usernames"]]:
+                wl["usernames"].append(username)
+                _save_wl(wl)
+                _set_whitelist_comment(username, f"applied from {ip}" if ip else "applied")
+        _save_whitelist_requests(requests)
+        return True
+
+
+WHITELIST_APPLICATIONS_PER_IP = 3
+WHITELIST_APPLICATIONS_MAX    = 100
+
+
+def _add_whitelist_application(username, ip):
+    """Returns (added, error). One file read and write under the lock, so
+    two applications at once can't lose each other or pass the caps."""
+    with _users_lock:
+        requests = _load_whitelist_requests()
+        if any(r.get("username", "").lower() == username.lower() and r.get("ip") == ip
+               for r in requests):
+            return False, None
+        if sum(1 for r in requests if r.get("ip") == ip) >= WHITELIST_APPLICATIONS_PER_IP:
+            return False, "You already have the most applications this server takes from one address."
+        if len(requests) >= WHITELIST_APPLICATIONS_MAX:
+            return False, "This server has too many applications waiting. Try again later."
+        requests.append({
+            "username": username, "ip": ip,
+            "applied_at": datetime.datetime.utcnow().isoformat() + "Z",
+        })
+        _save_whitelist_requests(requests)
+        return True, None
 
 
 # Kept in its own file rather than added to users.json's whitelist section
@@ -478,12 +504,13 @@ def _set_whitelist_comment(value, comment):
 
 
 def _deny_whitelist_request(index):
-    requests = _load_whitelist_requests()
-    if index < 0 or index >= len(requests):
-        return False
-    requests.pop(index)
-    _save_whitelist_requests(requests)
-    return True
+    with _users_lock:
+        requests = _load_whitelist_requests()
+        if index < 0 or index >= len(requests):
+            return False
+        requests.pop(index)
+        _save_whitelist_requests(requests)
+        return True
 
 
 def _is_blacklisted(username, user_id, ip):
@@ -506,23 +533,60 @@ def _is_whitelisted(username, ip):
     return False
 
 
+BAN_KICK_REASON = "You are banned from this server."
+
+
 def kick_player(username, ban=False):
-    """Kick (and optionally ban) a player via the WebSocket console."""
+    """Kicks a player through the console, by their account id when users.json
+    has it. There is no ban command: the caller blacklists first, and ban only
+    sets the reason the player is shown. The game answers Success even when
+    nobody matched, so the roster is read before and after."""
     try:
         with open(CONSOLE_TOKEN_FILE) as f:
             token = f.read().strip()
     except Exception:
         return False, "console_token.txt not found — start the server first"
+    user_id = _load_users().get(username.lower(), {}).get("user_id")
     ws = WsConsoleClient()
     ok, msg = ws.connect("127.0.0.1", token)
     if not ok:
         return False, f"Console not available: {msg}"
-    cmd = f'player ban "{username}"' if ban else f'player kick "{username}"'
-    rs, rd, err = ws.send_capture(cmd, timeout=6)
-    ws.disconnect()
-    if err:
-        return False, err
-    return True, rs or "Done"
+
+    read_error = []
+
+    def online():
+        r = ws.request("player list-detailed", timeout=6)
+        if r["error"]:
+            read_error[:] = [r["error"]]
+            return None
+        for row in r["result_data"] if isinstance(r["result_data"], list) else []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("Username") or row.get("username") or "")
+            if (user_id is not None and row.get("Id", row.get("id")) == user_id) \
+                    or name.lower() == username.lower():
+                return True
+        return False
+
+    try:
+        if online() is False:
+            return False, "They aren't on the server."
+        target = str(user_id) if user_id is not None else f'"{username}"'
+        cmd = f'player kick {target} "{BAN_KICK_REASON}"' if ban else f"player kick {target}"
+        rs, rd, err = ws.send_capture(cmd, timeout=6)
+        if err:
+            return False, err
+        # Right after a kick the list can fail once while the player leaves.
+        for _ in range(10):
+            still = online()
+            if still is False:
+                return True, "Kicked."
+            time.sleep(0.5)
+        if still is None:
+            return True, f"Sent the kick, but couldn't read the player list: {read_error[0]}"
+        return False, "Sent the kick, but they are still on the server."
+    finally:
+        ws.disconnect()
 
 
 _fail_counts = {}

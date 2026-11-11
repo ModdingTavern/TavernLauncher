@@ -56,6 +56,11 @@ def save_enabled_addon_names(names):
         pass
 
 
+# What happened to each enabled addon at startup, for the Addons window:
+# name -> {"state": "loaded" | "failed" | "nothing", "message", "detail"}
+LOAD_RESULTS = {}
+
+
 def load_enabled_addons(side, log_error):
     enabled = load_enabled_addon_names()
     d = addons_dir()
@@ -68,8 +73,14 @@ def load_enabled_addons(side, log_error):
             continue
         file_path = os.path.join(d, name, f"{side}.py")
         if not os.path.isfile(file_path):
+            LOAD_RESULTS[name] = {"state": "nothing", "message": f"Has no {side}.py, so there is nothing to load here.",
+                                  "detail": ""}
             continue
         try:
             importlib.import_module(f"addons.{name}.{side}")
-        except Exception:
-            log_error(f"Failed to load addon '{name}' ({side}.py):\n{traceback.format_exc()}")
+            LOAD_RESULTS[name] = {"state": "loaded", "message": "Loaded.", "detail": ""}
+        except Exception as e:
+            detail = traceback.format_exc()
+            log_error(f"Failed to load addon '{name}' ({side}.py):\n{detail}")
+            LOAD_RESULTS[name] = {"state": "failed", "message": f"Failed to load: {type(e).__name__}: {e}",
+                                  "detail": detail}

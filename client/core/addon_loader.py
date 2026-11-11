@@ -69,6 +69,19 @@ def save_enabled_addon_names(names):
         pass
 
 
+# Addons that are part of the launcher now. Loading one as well would add a second tab or button.
+BUILT_IN = {
+    "prefabloader": "Prefab Loader is built into TavernKeeper now as its Prefabs tab, so the addon was not loaded. "
+                    "You can delete the addons/prefabloader folder.",
+    "mainmenu": "The Main Menu button is built into the launcher now, so the addon was not loaded. "
+                "You can delete the addons/mainmenu folder.",
+}
+
+# What happened to each enabled addon at startup, for the Addons window:
+# name -> {"state": "loaded" | "failed" | "built_in" | "nothing", "message", "detail"}
+LOAD_RESULTS = {}
+
+
 def load_enabled_addons(side, log_error):
     """Loads addons/<name>/<side>.py for every enabled addon that has a
     file for this side. Uses normal importlib.import_module (addons/ is
@@ -82,10 +95,20 @@ def load_enabled_addons(side, log_error):
     for name in discover_addons():
         if name not in enabled:
             continue
+        if name in BUILT_IN:
+            log_error(BUILT_IN[name])
+            LOAD_RESULTS[name] = {"state": "built_in", "message": BUILT_IN[name], "detail": ""}
+            continue
         file_path = os.path.join(d, name, f"{side}.py")
         if not os.path.isfile(file_path):
+            LOAD_RESULTS[name] = {"state": "nothing", "message": f"Has no {side}.py, so there is nothing to load here.",
+                                  "detail": ""}
             continue
         try:
             importlib.import_module(f"addons.{name}.{side}")
-        except Exception:
-            log_error(f"Failed to load addon '{name}' ({side}.py):\n{traceback.format_exc()}")
+            LOAD_RESULTS[name] = {"state": "loaded", "message": "Loaded.", "detail": ""}
+        except Exception as e:
+            detail = traceback.format_exc()
+            log_error(f"Failed to load addon '{name}' ({side}.py):\n{detail}")
+            LOAD_RESULTS[name] = {"state": "failed", "message": f"Failed to load: {type(e).__name__}: {e}",
+                                  "detail": detail}

@@ -21,6 +21,7 @@ from tavern_shared.theme import (
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon, _header_crop_box
 from tavern_shared.help_pane import attach_help_tab
+from tavern_shared.screen_fit import ScreenFit
 from tavern_shared.assets import _HEADER_BANNER_IMG
 try:
     from PIL import Image as _PILImage, ImageTk as _PILImageTk, ImageEnhance as _PILImageEnhance
@@ -31,6 +32,8 @@ from tavern_shared.mod_install import _melonloader_installed, _mods_need_attenti
 from tavern_shared.patch import _patch_source_path, _patch_is_applied, apply_patch
 from tavern_shared.mods_window import ModsWindow
 from tavern_shared.log_archive import archive_log_now, should_auto_archive
+from tavern_shared.ws_console_client import WsConsoleClient
+from tavern_shared.app_ready import run_app_ready
 
 from server.core.data_store import (
     load_cfg, save_cfg, CONFIG_FILE, GAME_LOG_PATH, DISCORD_URL,
@@ -43,6 +46,7 @@ from server.core.auth_service import (
     start_auth_service, AUTH_PORT, build_console_token, build_server_tokens,
 )
 from server.core.console_window import ConsoleWindow
+from server.core.server_process import remember, forget, left_running, console_port_free
 from server.core.tickets_window import TicketsWindow
 from server.core.player_manager import PlayerManagerWindow
 from server.core.server_settings import ServerSettingsWindow
@@ -94,22 +98,37 @@ class ServerLauncher(tk.Tk):
         self._start_log_tailer()
         self._start_auto_archive_check()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        # Same reasoning as the client launcher — fit_w used to be a
-        # hardcoded guess that went stale every time a row gained another
-        # button/checkbox; measuring it the same way fit_h already was is
-        # what actually keeps this correct going forward.
-        self.update_idletasks()
-        fit_w = max(560, self.winfo_reqwidth())
-        fit_h = self.winfo_reqheight()
-        self.geometry(f"{fit_w}x{fit_h}")
-        self.minsize(fit_w, fit_h)
         _finish_dark_window(self)
         attach_help_tab(self)
+        run_app_ready(self, self._print)
+        self.after(0, self._adopt_left_running)
+
+    def _adopt_left_running(self):
+        """A server the last launcher started and never stopped gets its
+        login service back and is stopped like any other."""
+        proc = left_running()
+        if not proc:
+            return
+        self._proc = proc
+        if not self._auth_on:
+            start_auth_service(self._print)
+            self._auth_on = True
+        self._set_running(True)
+        self._print(f"The server from last time is still running (PID {proc.pid}). "
+                    "This launcher has taken it back over.", "ok")
+        self._schedule_auto_reboot()
+        self._schedule_backups()
+
+    def deiconify(self):
+        self._screen_fit.fit_once()
+        super().deiconify()
 
     def _build_ui(self):
+        self._screen_fit = ScreenFit(self, BG, min_open_width=560)
+        body = self._screen_fit.body
         self._header()
-        _section_label(self, "Path to 'A Township Tale.exe'")
-        pf = _field(self)
+        _section_label(body, "Path to 'A Township Tale.exe'")
+        pf = _field(body)
         self.v_exe = tk.StringVar()
         self.v_exe.trace_add("write", self._on_exe_changed)
         tk.Entry(pf, textvariable=self.v_exe, bg=SURF, fg=PARCH,
@@ -117,7 +136,7 @@ class ServerLauncher(tk.Tk):
                  bd=6).pack(side="left", fill="x", expand=True)
         _btn(pf, "Browse", self._browse, font=("Segoe UI",9),
              padx=10, pady=6).pack(side="right")
-        btn_row_mods = tk.Frame(self, bg=BG)
+        btn_row_mods = tk.Frame(body, bg=BG)
         btn_row_mods.pack(fill="x", padx=20, pady=(4,0))
         self._patch_btn = _btn(btn_row_mods, "🩹 Patch", self._on_patch_click,
              font=("Segoe UI",9), pady=5, padx=10)
@@ -125,21 +144,21 @@ class ServerLauncher(tk.Tk):
         self._mods_btn = _btn(btn_row_mods, "🧪 Mods", self._open_mods,
              font=("Segoe UI",9), pady=5, padx=10)
         self._mods_btn.pack(side="left", padx=(6,0))
-        _section_label(self, "GAME PORT")
-        pf2 = _field(self)
+        _section_label(body, "GAME PORT")
+        pf2 = _field(body)
         self.v_port = tk.StringVar(value="1757")
         tk.Entry(pf2, textvariable=self.v_port, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10), bd=6).pack(fill="x")
-        _hint(self, "Forward 1757–1762 (UDP+TCP) for remote players.")
-        _divider(self)
+        _hint(body, "Forward 1757–1762 (UDP+TCP) for remote players.")
+        _divider(body)
         self._sv_name_var = tk.StringVar(value="—")
-        nf = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        nf = tk.Frame(body, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         nf.pack(fill="x", padx=20, pady=(0,4))
         tk.Label(nf, text="SERVER NAME", bg=SURF, fg=MUTED,
                  font=("Segoe UI",8,"bold")).pack(side="left", padx=10, pady=6)
         tk.Label(nf, textvariable=self._sv_name_var, bg=SURF, fg=AMBER,
                  font=("Georgia",11,"bold")).pack(side="left", padx=4, pady=6)
-        tr = tk.Frame(self, bg=BG)
+        tr = tk.Frame(body, bg=BG)
         tr.pack(fill="x", padx=20, pady=(4,4))
         _btn(tr, "⚙ Settings", self._open_settings, font=("Segoe UI",9),
              pady=7, padx=12).pack(side="left")
@@ -159,8 +178,8 @@ class ServerLauncher(tk.Tk):
              pady=7, padx=12).pack(side="left", padx=6)
         _btn(tr, "📁 Saves",    self._open_saves,    font=("Segoe UI",9),
              pady=7, padx=12).pack(side="right")
-        _divider(self)
-        sf = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        _divider(body)
+        sf = tk.Frame(body, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         sf.pack(fill="x", padx=20, pady=(0,6))
         self._dot = tk.Canvas(sf, width=10, height=10, bg=SURF, highlightthickness=0)
         self._dot.pack(side="left", padx=(10,6), pady=8)
@@ -171,7 +190,7 @@ class ServerLauncher(tk.Tk):
         self._pid_var = tk.StringVar()
         tk.Label(sf, textvariable=self._pid_var, bg=SURF, fg=AMBERDIM,
                  font=MONO).pack(side="right", padx=10)
-        bf = tk.Frame(self, bg=BG)
+        bf = tk.Frame(body, bg=BG)
         bf.pack(fill="x", padx=20, pady=(0,6))
         self._btn_start = _btn(bf, "⚔   Open Server", self._start, "success",
                                font=("Georgia",12,"bold"), pady=12)
@@ -180,14 +199,14 @@ class ServerLauncher(tk.Tk):
                               font=("Georgia",12,"bold"), pady=12)
         self._btn_stop.pack(fill="x")
         self._btn_stop.config(state="disabled")
-        log_header = tk.Frame(self, bg=BG)
+        log_header = tk.Frame(body, bg=BG)
         log_header.pack(fill="x")
         tk.Label(log_header, text="SERVER LOG", bg=BG, fg=MUTED,
                  font=("Georgia",8,"bold")).pack(side="left", padx=22, pady=(7,3))
         self._archive_log_btn = _btn(log_header, "🗄 Archive Log", self._on_archive_log_click,
              font=("Segoe UI",7), pady=2, padx=6)
         self._archive_log_btn.pack(side="right", padx=(0,20))
-        lf = tk.Frame(self, bg=BG)
+        lf = tk.Frame(body, bg=BG)
         lf.pack(fill="both", expand=True, padx=20, pady=(0,8))
         lb = tk.Frame(lf, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         lb.pack(fill="both", expand=True)
@@ -205,7 +224,8 @@ class ServerLauncher(tk.Tk):
 
         # ── Enhanced Debugging / Show MelonLoader toggles ────────────────────
         df = tk.Frame(self, bg=BG)
-        df.pack(side="bottom", fill="x", padx=14, pady=(0,6))
+        df.pack(side="bottom", fill="x", padx=14, pady=(0,6), before=self._screen_fit.shell)
+        self._screen_fit.set_parts(df, self.log)
         self.v_debug_helper = tk.BooleanVar(value=False)
         tk.Checkbutton(df, text="Enhanced Debugging", variable=self.v_debug_helper,
                        command=self._save, bg=BG, fg=MUTED, selectcolor=SURF,
@@ -249,7 +269,8 @@ class ServerLauncher(tk.Tk):
         self._addons_btn.pack(side="right", padx=(0,6))
 
     def _header(self):
-        h = tk.Frame(self, bg=SURF, height=64)
+        body = self._screen_fit.body
+        h = tk.Frame(body, bg=SURF, height=64)
         h.pack(fill="x"); h.pack_propagate(False)
 
         canvas = tk.Canvas(h, bg=SURF, highlightthickness=0, bd=0)
@@ -276,7 +297,7 @@ class ServerLauncher(tk.Tk):
                              activebackground=AMBERDIM, activeforeground="#ffd080",
                              relief="flat", bd=0, cursor="hand2",
                              font=("Segoe UI",9), padx=10, pady=4,
-                             command=getattr(self, b["command_attr"]))
+                             command=self._header_command(b))
             item = canvas.create_window(0, 32, anchor="e", window=btn)
             self._header_widgets[b["key"]] = btn
             self._header_items[b["key"]] = item
@@ -289,7 +310,18 @@ class ServerLauncher(tk.Tk):
                 self._copy_token_btn_item = item
 
         canvas.bind("<Configure>", self._on_header_resize)
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x")
+
+    def _header_command(self, b):
+        if b.get("command") is None:
+            return getattr(self, b["command_attr"])
+
+        def run():
+            try:
+                b["command"](self)
+            except Exception as e:
+                self._print(f"[{b['key']}] {e}", "err")
+        return run
 
     def _open_discord(self):
         webbrowser.open(DISCORD_URL)
@@ -673,20 +705,9 @@ class ServerLauncher(tk.Tk):
                     self._print(f"Log archived to {result2}", "ok")
                 else:
                     self._print(f"Couldn't archive log even after stopping the server: {result2}", "err")
-                self._start()
+                self._start_when_console_free()
 
-            # _stop() clears self._proc right away, so grab it first.
-            proc_to_wait = self._proc
-            self._stop(reboot=False)
-
-            def wait_for_exit_then_archive():
-                if proc_to_wait is not None:
-                    try:
-                        proc_to_wait.wait(timeout=5)
-                    except Exception:
-                        pass
-                self.after(500, do_archive_then_restart)
-            threading.Thread(target=wait_for_exit_then_archive, daemon=True).start()
+            self._stop(then=lambda: self.after(500, do_archive_then_restart))
 
         self._archive_log_with_tailer_paused(after_pausing_tailer)
 
@@ -715,6 +736,13 @@ class ServerLauncher(tk.Tk):
         self.log.see("end"); self.log.config(state="disabled")
 
     def _start(self):
+        if getattr(self, "_stopping", False) or (self._proc and self._proc.poll() is None):
+            self._print("The server is still running.", "warn")
+            return
+        if not console_port_free():
+            self._print("Port 1760 is in use, so another server is still running on this PC. "
+                        "Close it first (Task Manager: A Township Tale).", "err")
+            return
         exe = self.v_exe.get().strip()
         if not exe or not os.path.isfile(exe):
             messagebox.showerror("Not found",
@@ -768,9 +796,10 @@ class ServerLauncher(tk.Tk):
             self._proc = subprocess.Popen(args, cwd=os.path.dirname(exe), **kwargs)
         except Exception as e:
             self._print(f"Failed: {e}", "err"); return
+        remember(self._proc.pid, exe)
         self._set_running(True)
         self._print(f"Server running (PID {self._proc.pid})", "ok")
-        threading.Thread(target=self._watch, daemon=True).start()
+        threading.Thread(target=self._watch, args=(self._proc,), daemon=True).start()
         # Kill a still-pending reboot timer from before this start
         if getattr(self, "_reboot_after_id", None):
             self.after_cancel(self._reboot_after_id)
@@ -778,27 +807,110 @@ class ServerLauncher(tk.Tk):
         self._schedule_auto_reboot()
         self._schedule_backups()
 
-    def _watch(self):
+    def _watch(self, proc):
         time.sleep(8)
-        if self._proc and self._proc.poll() is None:
+        if proc is not self._proc or getattr(self, "_stopping", False):
+            return  # stopped on purpose meanwhile
+        if proc.poll() is None:
             self._print("Server ready. Players may connect.", "ok")
         else:
+            forget()
             self._print("Server exited unexpectedly.", "err")
             self.after(0, lambda: self._set_running(False))
 
-    def _stop(self, reboot=False):
-        # A manual stop
+    STOP_SAVE_TIMEOUT = 120
+    STOP_EXIT_TIMEOUT = 60
+
+    def _stop(self, reboot=False, then=None):
+        """Saves and quits the server through its console, waits for the
+        process to exit, and only kills it if it won't. A kill loses
+        everything since the last save. then() runs once it is gone;
+        reboot starts it again."""
         if getattr(self, "_reboot_after_id", None):
             self.after_cancel(self._reboot_after_id)
             self._reboot_after_id = None
         self._cancel_backups()
-        if self._proc:
-            try: self._proc.terminate(); self._print("Closing server…", "warn")
-            except Exception as e: self._print(f"Stop failed: {e}", "err")
-        self._set_running(False); self._proc = None
+        if getattr(self, "_stopping", False):
+            return
+        proc = self._proc
+        if not proc or proc.poll() is not None:
+            self._proc = None
+            self._set_running(False)
+            if then:
+                then()
+            return
+        self._stopping = True
+        self._status_var.set("Stopping…")
+        self._btn_start.config(state="disabled")
+        self._btn_stop.config(state="disabled")
+        self._print("Saving and closing the server…", "warn")
+        threading.Thread(target=self._stop_worker, args=(proc, reboot, then), daemon=True).start()
+
+    def _stop_worker(self, proc, reboot, then):
+        problem = self._quit_through_console()
+        if problem:
+            self._print(f"Couldn't ask the server to quit: {problem}", "err")
+        else:
+            try:
+                proc.wait(timeout=self.STOP_EXIT_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                self._print(f"The server didn't close within {self.STOP_EXIT_TIMEOUT} s.", "err")
+        if proc.poll() is None:
+            self._print("Forcing it closed. Anything since the last save is lost.", "err")
+            try:
+                proc.terminate()
+                proc.wait(timeout=15)
+            except Exception as e:
+                self._print(f"Stop failed: {e}", "err")
+        self.after(0, lambda: self._stopped(proc, reboot, then))
+
+    def _quit_through_console(self):
+        """None once quit was sent, else why it couldn't be. quit saves the
+        world on its own; save now first is there to report a failed save."""
+        try:
+            with open(CONSOLE_TOKEN_FILE) as f:
+                token = f.read().strip()
+        except Exception:
+            return "console_token.txt not found"
+        ws = WsConsoleClient()
+        ok, msg = ws.connect("127.0.0.1", token)
+        if not ok:
+            return f"the console isn't answering ({msg})"
+        try:
+            r = ws.request("save now", timeout=self.STOP_SAVE_TIMEOUT)
+            if r["error"]:
+                self._print(f"Save failed: {r['error']}. Quitting anyway, which saves too.", "warn")
+            else:
+                self._print("World saved.", "ok")
+            r = ws.request("quit", timeout=15)
+            if r["error"]:
+                self._print(f"quit answered: {r['error']}", "warn")
+            return None
+        finally:
+            ws.disconnect()
+
+    def _stopped(self, proc, reboot, then):
+        self._stopping = False
+        if self._proc is proc:
+            self._proc = None
+        forget()
+        self._set_running(False)
+        self._print("Server stopped.", "ok")
         if reboot:
-            self._print("Auto-reboot: restarting in 10 seconds…", "warn")
-            self.after(10000, self._start)
+            self._print("Auto-reboot: starting it again…", "warn")
+            self._start_when_console_free()
+        if then:
+            then()
+
+    def _start_when_console_free(self, tries=30):
+        """After a forced stop Windows can hold the console port a few
+        seconds more; wait up to 15 s for it rather than refuse."""
+        if tries <= 0 or console_port_free():
+            self._start()
+            return
+        if tries == 30:
+            self._print("Waiting for port 1760 to be released…", "dim")
+        self.after(500, lambda: self._start_when_console_free(tries - 1))
 
     def _schedule_auto_reboot(self):
         """Called once after server starts. Cancels any existing schedule,
@@ -898,10 +1010,16 @@ class ServerLauncher(tk.Tk):
         self.after(0, _do)
 
     def _on_close(self):
+        if getattr(self, "_stopping", False):
+            self._print("Still closing the server…", "warn")
+            return
         if self._proc and self._proc.poll() is None:
             if messagebox.askyesno("Server running",
-                                   "Stop the server before closing?", parent=self):
-                self._stop()
+                    "The server is still running. Save and stop it, then close the launcher?\n\n"
+                    "No keeps the launcher open: nobody can log in to the server without it.",
+                    parent=self):
+                self._stop(then=self.destroy)
+            return
         self.destroy()
 
 

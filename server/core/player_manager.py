@@ -153,8 +153,7 @@ class PlayerManagerWindow(tk.Toplevel):
             _save_bl(bl)
         # Kick live session
         ok, msg = kick_player(uname, ban=True)
-        detail = msg or "Sent ban command."
-        messagebox.showinfo("Banned", f"'{uname}' added to blacklist.\n{detail}", parent=self)
+        messagebox.showinfo("Banned", f"'{uname}' added to blacklist.\n{msg}", parent=self)
 
     def _change_uid(self):
         uname = self._selected_username()
@@ -325,9 +324,9 @@ class PlayerManagerWindow(tk.Toplevel):
         _section_label(parent, "ALLOWED — USERNAME / IP")
         tree = _mk_tree(parent, ("type","value","comment"), [90, 220, 200], height=10)
         self._wl_tree = tree
-        _hint(parent, "When whitelist is enabled, only these entries may join. Comments are "
-                      "your own notes only -- e.g. approving an application auto-fills the "
-                      "applicant's username here, so a lone IP entry doesn't turn into a mystery later.")
+        _hint(parent, "When whitelist is enabled, only these entries may join. An IP entry lets in "
+                      "every name from that address. Comments are your own notes only -- "
+                      "approving an application fills in the IP it came from.")
         ar = tk.Frame(parent, bg=BG)
         ar.pack(fill="x", padx=8, pady=(0,4))
         type_var = tk.StringVar(value="username")
@@ -452,7 +451,7 @@ class PlayerManagerWindow(tk.Toplevel):
         tree = _mk_tree(parent, ("username","ip","applied"), [180, 160, 200], height=12)
         self._apps_tree = tree
         _hint(parent, "Applied from in-game join attempts against your whitelisted server. "
-                       "Approving adds both the username and IP to your Whitelist tab.")
+                       "Approving adds the username to your Whitelist tab, not the IP.")
         br = tk.Frame(parent, bg=BG)
         br.pack(fill="x", padx=8, pady=(0,6))
         _btn(br, "✓ Approve", self._approve_selected_application, "primary",

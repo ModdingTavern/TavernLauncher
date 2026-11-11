@@ -105,7 +105,8 @@ Configure your internet router port forwarding: <br>
 Forward to your copied private IP.
 
 Please note that this is a port RANGE! It means port 1757, 1758, 1759, 1760, 1761 AND 1762, not only 1757 + 1762.
-While 1758 and 1760 aren't used, it's easier to just forward that range to keep it tidier on your router.
+1758 isn't used, and 1760 is optional: it is the server console, where TavernKeeper and the Remote Console connect from outside your network.
+It's easier to just forward that range to keep it tidier on your router.
 If you care about having reduced exposure, make three separate rules: <br>
 - `UDP 1757` <br>
 - `TCP 1761` <br>

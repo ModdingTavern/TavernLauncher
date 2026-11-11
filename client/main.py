@@ -3,7 +3,8 @@ Client launcher entry point. Loads whichever addons the user has
 actually enabled (see the in-app Addons window / client/core/
 addon_loader.py) BEFORE building the main window, so every enabled
 addon has already registered its tabs/hooks by the time
-ClientLauncher._build_main_ui() runs.
+ClientLauncher._build_ui() runs. Hooks that need the finished window use
+tavern_shared.app_ready.register_app_ready.
 
 Addons are no longer baked in at build time -- this .exe is always
 "core only"; addons/ is a plain folder of .py files expected to sit
@@ -12,6 +13,7 @@ in client_enabled_addons.json.
 """
 import sys
 import os
+import threading
 import traceback
 
 # So `import tavern_shared`, `import client.core...` all resolve
@@ -44,6 +46,18 @@ def _write_error_log(err_text):
     except Exception:
         pass
 
+
+def _log_thread_exception(args):
+    # A crash in a background thread (ticket polling, a launch, the
+    # console client) otherwise vanishes without a trace in a windowed build.
+    if args.exc_type is SystemExit:
+        return
+    name = args.thread.name if args.thread is not None else "?"
+    _write_error_log(f"Uncaught error in thread {name}:\n" + "".join(
+        traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+
+
+threading.excepthook = _log_thread_exception
 
 from client.core import addon_loader
 addon_loader.load_enabled_addons("client", _write_error_log)

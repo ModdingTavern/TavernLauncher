@@ -2,8 +2,10 @@
 The main Client launcher window -- username/platform/destination fields,
 Mods/Patch buttons, Check/Join Server, and the game log panel. Custom
 asset syncing is NOT hardcoded here anymore: _do_launch calls
-run_post_auth_hooks() unconditionally, and addons/custom_models/client.py
-is what actually does anything at that point, if it's part of this build.
+run_post_auth_hooks() after every successful handshake (see launch_hooks
+for the local-server rule), and addons/custom_models/client.py is what
+actually does anything at that point, if it's part of this build. Every
+game start goes through spawn_game(), so launch hooks see all of them.
 """
 import os
 import sys
@@ -24,6 +26,7 @@ from tavern_shared.theme import (
 )
 from tavern_shared.window_chrome import _start_hidden, _finish_dark_window, _set_window_icon, _header_crop_box
 from tavern_shared.help_pane import attach_help_tab
+from tavern_shared.screen_fit import ScreenFit
 from tavern_shared.assets import _HEADER_BANNER_IMG
 try:
     from PIL import Image as _PILImage, ImageTk as _PILImageTk, ImageEnhance as _PILImageEnhance
@@ -46,7 +49,8 @@ from client.core.auth import (
     AUTH_PORT, authenticate, ping_server, _resolve_ip_for_game, _valid_port,
     build_tokens, _headless_user_id, register_whitelist_application, ticket_request,
 )
-from client.core.launch_hooks import run_post_auth_hooks
+from client.core.launch_hooks import run_post_auth_hooks, run_launch_hooks, LaunchContext
+from tavern_shared.app_ready import run_app_ready
 from client.core.addon_hooks import build_launcher_actions, run_before_launch_hooks
 from client.core.community_browser import CommunityBrowser
 from client.core.server_list_panel import ServerListPanel
@@ -101,29 +105,23 @@ class ClientLauncher(tk.Tk):
         self._exe_check_job   = None
         self._build_ui()
         self._load()
-        # Start at exactly the size the fully-built layout needs, then set
-        # that as the floor — shrinking further would start cutting into
-        # either the log area or the bottom toggle row (whichever runs out
-        # of room first), while growing beyond it just gives the log more
-        # room to breathe. fit_w used to be a hardcoded guess that went
-        # stale every time a row gained another button/checkbox — measuring
-        # it the same way fit_h already was is what actually keeps this
-        # correct going forward.
-        self.update_idletasks()
-        fit_w = max(540, self.winfo_reqwidth())
-        fit_h = self.winfo_reqheight()
-        self.geometry(f"{fit_w}x{fit_h}")
-        self.minsize(fit_w, fit_h)
         _finish_dark_window(self)
         attach_help_tab(self)
+        run_app_ready(self, self._print)
+
+    def deiconify(self):
+        self._screen_fit.fit_once()
+        super().deiconify()
 
     # ── UI ─────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
+        self._screen_fit = ScreenFit(self, BG)
+        body = self._screen_fit.body
         self._header()
 
-        _section_label(self, "Path to 'A Township Tale.exe'")
-        pf = _field(self)
+        _section_label(body, "Path to 'A Township Tale.exe'")
+        pf = _field(body)
         self.v_exe = tk.StringVar()
         self.v_exe.trace_add("write", self._on_exe_changed)
         tk.Entry(pf, textvariable=self.v_exe, bg=SURF, fg=PARCH,
@@ -131,7 +129,7 @@ class ClientLauncher(tk.Tk):
                  bd=6).pack(side="left", fill="x", expand=True)
         _btn(pf, "Browse", self._browse, font=("Segoe UI",9),
              padx=10, pady=6).pack(side="right")
-        btn_row_mods = tk.Frame(self, bg=BG)
+        btn_row_mods = tk.Frame(body, bg=BG)
         btn_row_mods.pack(fill="x", padx=20, pady=(4,0))
         self._patch_btn = _btn(btn_row_mods, "🩹 Patch", self._on_patch_click,
              font=("Segoe UI",9), pady=5, padx=10)
@@ -142,25 +140,25 @@ class ClientLauncher(tk.Tk):
         _btn(btn_row_mods, "🎮 Game Settings", self._open_game_settings,
              font=("Segoe UI",9), pady=5, padx=10).pack(side="right")
 
-        _divider(self)
+        _divider(body)
 
-        _section_label(self, "CHOOSE YOUR USERNAME")
-        nf = _field(self)
+        _section_label(body, "CHOOSE YOUR USERNAME")
+        nf = _field(body)
         self.v_username = tk.StringVar()
         tk.Entry(nf, textvariable=self.v_username, bg=SURF, fg=PARCH,
                  insertbackground=AMBER, relief="flat", font=("Consolas",10),
                  bd=6).pack(fill="x")
 
-        _section_label(self, "CHOOSE YOUR PLATFORM")
-        pf2 = tk.Frame(self, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
+        _section_label(body, "CHOOSE YOUR PLATFORM")
+        pf2 = tk.Frame(body, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         pf2.pack(fill="x", padx=20, pady=(0,4))
         self.v_platform = tk.StringVar(value="SteamVR")
         _mk_combobox(pf2, self.v_platform, ["SteamVR","Quest","Fly"])
 
-        _divider(self)
+        _divider(body)
 
-        _section_label(self, "Destination (leave blank for localhost)")
-        sf = _field(self)
+        _section_label(body, "Destination (leave blank for localhost)")
+        sf = _field(body)
         self.v_ip = tk.StringVar()
         self.v_ip.trace_add("write", self._on_ip_changed)
         tk.Entry(sf, textvariable=self.v_ip, bg=SURF, fg=PARCH,
@@ -171,12 +169,14 @@ class ClientLauncher(tk.Tk):
                  insertbackground=AMBER, relief="flat", font=("Consolas",10),
                  bd=6, width=6, justify="center").pack(side="left", padx=(4,0))
 
-        btn_row_dest = tk.Frame(self, bg=BG)
+        btn_row_dest = tk.Frame(body, bg=BG)
         btn_row_dest.pack(fill="x", padx=20, pady=(4,0))
-        _btn(btn_row_dest, "⚑ Saved",             self._open_server_list,
-             font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
-        _btn(btn_row_dest, "🌍 Community Servers", self._open_community,
-             font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=6)
+        saved_btn = _btn(btn_row_dest, "⚑ Saved",             self._open_server_list,
+             font=("Segoe UI",9), pady=5, padx=10)
+        saved_btn.pack(side="left")
+        community_btn = _btn(btn_row_dest, "🌍 Community Servers", self._open_community,
+             font=("Segoe UI",9), pady=5, padx=10)
+        community_btn.pack(side="left", padx=6)
         self._tickets_btn = _btn(btn_row_dest, "🎫 Tickets",           self._open_tickets,
              font=("Segoe UI",9), pady=5, padx=10)
         self._tickets_btn.pack(side="left", padx=(0,6))
@@ -184,26 +184,26 @@ class ClientLauncher(tk.Tk):
         start_flashing_button(self._tickets_btn,
             lambda: self._has_unseen_ticket_reply, normal_bg=SURF2, alert_bg=RED)
         threading.Thread(target=self._poll_ticket_replies_loop, daemon=True).start()
-        _btn(btn_row_dest, "🖥 Remote Console",    self._open_remote_console,
-             font=("Segoe UI",9), pady=5, padx=10).pack(side="left", padx=(0,6))
-        _btn(btn_row_dest, "🧩 TavernKeeper",     self._open_tavernkeeper,
-             font=("Segoe UI",9), pady=5, padx=10).pack(side="left")
-
-        build_launcher_actions(btn_row_dest, self)
+        console_btn = _btn(btn_row_dest, "🖥 Remote Console",    self._open_remote_console,
+             font=("Segoe UI",9), pady=5, padx=10)
+        console_btn.pack(side="left", padx=(0,6))
+        tk_btn = _btn(btn_row_dest, "🧩 TavernKeeper",     self._open_tavernkeeper,
+             font=("Segoe UI",9), pady=5, padx=10)
+        tk_btn.pack(side="left")
 
         # ── Action area ──────────────────────────────────────────────────────
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x", padx=20, pady=6)
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", padx=20, pady=6)
 
         # Status line shown after Check Server — plain label, not a box
         self._check_status = tk.StringVar(value="")
-        self._check_label = tk.Label(self, textvariable=self._check_status,
+        self._check_label = tk.Label(body, textvariable=self._check_status,
                  bg=BG, fg=MUTED, font=("Segoe UI",9),
                  justify="left", anchor="w", wraplength=480)
         self._check_label.pack(fill="x", padx=22, pady=(0,4))
 
         # Check Server, Join Server, and Menu Menu sit side by side.
         # Checking is purely optional/informational now, never a gate on joining.
-        action_row = tk.Frame(self, bg=BG)
+        action_row = tk.Frame(body, bg=BG)
         action_row.pack(fill="x", padx=20, pady=(0,4))
         self._check_btn = _btn(action_row, "🔍  Check Server", self._do_check,
                                 font=("Georgia",12,"bold"), pady=14)
@@ -213,15 +213,26 @@ class ClientLauncher(tk.Tk):
         self._action_btn.pack(side="left", fill="x", expand=True, padx=(4,0))
         self._menu_btn = _btn(action_row, "🏠  Main Menu", self._do_launch_menu, font=("Georgia",12,"bold"), pady=14)
 
+        # Addon buttons go in by key (see addon_hooks), so they never have
+        # to find a built-in button by its text.
+        self._button_rows = {"mods": btn_row_mods, "servers": btn_row_dest, "main": action_row}
+        self._named_buttons = {
+            "patch": self._patch_btn, "mods": self._mods_btn,
+            "saved": saved_btn, "community": community_btn, "tickets": self._tickets_btn,
+            "remote_console": console_btn, "tavernkeeper": tk_btn,
+            "check": self._check_btn, "join": self._action_btn, "menu": self._menu_btn,
+        }
+        build_launcher_actions(self)
+
         # ── Log ───────────────────────────────────────────────────────────────
-        log_header = tk.Frame(self, bg=BG)
+        log_header = tk.Frame(body, bg=BG)
         log_header.pack(fill="x")
         tk.Label(log_header, text="GAME LOG", bg=BG, fg=MUTED,
                  font=("Georgia",8,"bold")).pack(side="left", padx=22, pady=(7,3))
         self._archive_log_btn = _btn(log_header, "🗄 Archive Log", self._on_archive_log_click,
              font=("Segoe UI",7), pady=2, padx=6)
         self._archive_log_btn.pack(side="right", padx=(0,20))
-        lf = tk.Frame(self, bg=BG)
+        lf = tk.Frame(body, bg=BG)
         lf.pack(fill="both", expand=True, padx=20, pady=(0,8))
         lb = tk.Frame(lf, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         lb.pack(fill="both", expand=True)
@@ -239,7 +250,8 @@ class ClientLauncher(tk.Tk):
 
         # ── Enhanced Debugging / Show MelonLoader toggles ────────────────────
         df = tk.Frame(self, bg=BG)
-        df.pack(side="bottom", fill="x", padx=14, pady=(0,6))
+        df.pack(side="bottom", fill="x", padx=14, pady=(0,6), before=self._screen_fit.shell)
+        self._screen_fit.set_parts(df, self.log)
         self.v_debug_helper = tk.BooleanVar(value=False)
         tk.Checkbutton(df, text="Enhanced Debugging", variable=self.v_debug_helper,
                        command=self._save, bg=BG, fg=MUTED, selectcolor=SURF,
@@ -258,8 +270,13 @@ class ClientLauncher(tk.Tk):
              font=("Segoe UI",7), pady=2, padx=6)
         self._addons_btn.pack(side="right", padx=(0,6))
 
+    def button(self, key):
+        """A launcher button by key, built-in or an addon's (see addon_hooks), or None."""
+        return self._named_buttons.get(key)
+
     def _header(self):
-        h = tk.Frame(self, bg=SURF, height=64)
+        body = self._screen_fit.body
+        h = tk.Frame(body, bg=SURF, height=64)
         h.pack(fill="x"); h.pack_propagate(False)
 
         canvas = tk.Canvas(h, bg=SURF, highlightthickness=0, bd=0)
@@ -306,7 +323,7 @@ class ClientLauncher(tk.Tk):
                                                      window=self._token_btn, state="hidden")
 
         canvas.bind("<Configure>", self._on_header_resize)
-        tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x")
 
     def _on_header_resize(self, event):
         """Rescales the banner to fill the header exactly, and keeps the
@@ -990,19 +1007,14 @@ class ClientLauncher(tk.Tk):
             return
 
         self._print(f"Welcomed as {username} (ID {user_id})", "ok")
-        # Skipped for localhost specifically: this resync clears and
-        # repopulates the flat CustomAssets/ folder that TavernLib reads
-        # from, regardless of whether the game process it's running inside
-        # is acting as your server or as a client -- there's no per-role
-        # distinction at that level. If you're hosting your own server AND
-        # joining it from the same machine, this resync was touching the
-        # exact same folder your own server process depends on, and could
-        # race with it (briefly empty/incomplete right as the server
-        # itself starts up and does its own one-time scan). A local server
-        # owner's folder is already exactly what's needed -- there's
-        # nothing to download from yourself over the network.
-        if host not in ("127.0.0.1", "localhost", socket.gethostname()):
-            run_post_auth_hooks(host, self._print)
+        # Hooks written as fn(host, log_fn) are still skipped for localhost:
+        # custom_models' resync clears and repopulates the flat CustomAssets/
+        # folder that TavernLib reads from, whether the game process is your
+        # server or a client. Hosting and joining from the same machine, that
+        # resync raced the server's own one-time scan of the same folder.
+        # A hook that takes is_local runs here too and decides for itself.
+        is_local = host in ("127.0.0.1", "localhost", socket.gethostname())
+        run_post_auth_hooks(host, self._print, is_local=is_local)
         self._show_token_button()
         if token_is_new and not had_token_before:
             # The very first token file this launcher has ever created on this
@@ -1045,17 +1057,7 @@ class ClientLauncher(tk.Tk):
             args.append(scene_arg)
 
         self._print(f"Launching on {platform or 'default'}…", "warn")
-        try:
-            # Whether MelonLoader's own console window shows up is controlled
-            # by the Show MelonLoader toggle: hiding it means redirecting the
-            # child's std handles at creation time (which is what makes it
-            # skip AllocConsole); showing it means leaving them alone.
-            run_before_launch_hooks(host, exe, self._print)
-            proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
-                                    **self._popen_console_kwargs())
-            self._print(f"Game running (PID {proc.pid})", "ok")
-        except Exception as e:
-            self._print(f"Launch failed: {e}", "err")
+        self.spawn_game("join", args, host=host, port=_valid_port(self.v_port.get()), label=sv_name)
         self._action_btn.config(state="normal")
 
     def _do_launch_headless(self):
@@ -1116,13 +1118,7 @@ class ClientLauncher(tk.Tk):
             args.append("/debug_helper")
 
         self._print(f"Launching on {platform or 'default'}…", "warn")
-        try:
-            run_before_launch_hooks(host, exe, self._print)
-            proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
-                                    **self._popen_console_kwargs())
-            self._print(f"Game running (PID {proc.pid})", "ok")
-        except Exception as e:
-            self._print(f"Launch failed: {e}", "err")
+        self.spawn_game("headless", args, host=host, port=_valid_port(self.v_port.get()), label=host)
         self._action_btn.config(state="normal")
 
     def _refresh_menu_btn(self):
@@ -1184,9 +1180,33 @@ class ClientLauncher(tk.Tk):
             args.append("/debug_helper")
 
         self._print(f"Launching main menu on {platform or 'default'}...", "warn")
+        self.spawn_game("menu", args, label="Main menu", what="Menu")
+
+    def spawn_game(self, kind, argv, host=None, port=None, label=None, what="Game"):
+        """Starts the game from argv (argv[0] is the exe) and returns the
+        process, or None if it didn't start. Every launch goes through here
+        so launch hooks see it; an addon that starts the game itself should
+        call this too, with its own kind (e.g. "solo")."""
+        platform = self.v_platform.get().strip()
+        ctx = LaunchContext(kind, argv, host=host, port=port, label=label,
+                            user=self.v_username.get().strip(),
+                            platform=PLATFORM_DISPLAY_TO_BACKEND.get(platform, platform))
+        if kind in ("join", "headless"):
+            run_before_launch_hooks(host, argv[0], self._print)
+        run_launch_hooks("before", ctx, self._print)
+        if ctx.cancelled:
+            self._print(f"Launch stopped: {ctx.cancelled}", "warn")
+            return None
         try:
-            proc = subprocess.Popen(args, cwd=os.path.dirname(exe),
-                                    **self._popen_console_kwargs())
-            self._print(f"Menu running (PID {proc.pid})", "ok")
+            # Whether MelonLoader's own console window shows up is controlled
+            # by the Show MelonLoader toggle: hiding it means redirecting the
+            # child's std handles at creation time (which is what makes it
+            # skip AllocConsole); showing it means leaving them alone.
+            ctx.proc = subprocess.Popen(ctx.argv, cwd=os.path.dirname(ctx.argv[0]),
+                                        **self._popen_console_kwargs())
         except Exception as e:
-            self._print(f"Menu launch failed: {e}", "err")
+            self._print(f"{'Launch' if what == 'Game' else what + ' launch'} failed: {e}", "err")
+            return None
+        self._print(f"{what} running (PID {ctx.proc.pid})", "ok")
+        run_launch_hooks("after", ctx, self._print)
+        return ctx.proc

@@ -18,7 +18,6 @@ import threading
 import base64
 import hashlib
 import hmac as _hmac
-import datetime
 
 from server.core.data_store import (
     load_cfg, load_server_settings, _throttle_ok, _record_fail,
@@ -27,7 +26,7 @@ from server.core.data_store import (
     _load_users, _save_users, _users_lock, BASE_USER_ID, UsersSaveError,
     CONSOLE_TOKEN_FILE, USERNAME_MAX_LEN, _is_valid_name,
     MAX_ACCOUNTS_PER_IP, PW_FAIL_LIMIT, _pw_fail_counts,
-    _load_whitelist_requests, _save_whitelist_requests,
+    _add_whitelist_application,
 )
 from tavern_shared.paths import _tavern_data_dir
 
@@ -172,23 +171,28 @@ def _handle_auth(conn, addr, log_fn):
         # payload, same reasoning as the TavernLib side. ──
         if req.get("register_whitelist_application"):
             username = str(req.get("username","")).strip()
+            refusal = None
             if not username:
-                conn.sendall(json.dumps({"status":"error","message":"Missing username"}).encode())
+                refusal = "Missing username"
+            elif len(username) > USERNAME_MAX_LEN or not _is_valid_name(username):
+                refusal = "That username can't join this server."
+            elif _is_blacklisted(username, None, ip):
+                refusal = "You are not permitted."
+            elif not load_server_settings().get("whitelist_enabled"):
+                refusal = "This server has no whitelist. You can join without applying."
+            if refusal is None:
+                added, refusal = _add_whitelist_application(username, ip)
+                if refusal:
+                    _record_fail(ip)
+                    log_fn(f"Whitelist application refused: '{username}' from {ip}", "warn")
+                elif added:
+                    log_fn(f"Whitelist application: '{username}' from {ip}", "ok")
+            if refusal:
+                conn.sendall(json.dumps({"status":"error","message":refusal}).encode())
                 return
-            requests = _load_whitelist_requests()
-            already_pending = any(
-                r.get("username","").lower() == username.lower() and r.get("ip") == ip
-                for r in requests
-            )
-            if not already_pending:
-                requests.append({
-                    "username": username, "ip": ip,
-                    "applied_at": datetime.datetime.utcnow().isoformat() + "Z",
-                })
-                _save_whitelist_requests(requests)
             conn.sendall(json.dumps({
                 "status": "whitelist_application_received",
-                "already_pending": already_pending,
+                "already_pending": not added,
             }).encode())
             return
 
@@ -338,8 +342,19 @@ def start_auth_service(log_fn, port=AUTH_PORT):
     def serve():
         try:
             s = socket.socket()
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("0.0.0.0", port)); s.listen(8)
+            # SO_REUSEADDR on Windows let a second launcher bind the same port
+            # without an error; exclusive makes the second one fail instead.
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("0.0.0.0", port))
+            except OSError:
+                log_fn(f"Port {port} is in use: another launcher or server already has it, "
+                       "so players can't log in through this one.", "err")
+                return
+            s.listen(8)
             log_fn(f"Auth service listening on :{port}", "dim")
             while True:
                 conn, addr = s.accept()

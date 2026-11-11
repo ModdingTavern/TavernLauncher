@@ -51,10 +51,10 @@ if errorlevel 1 (
 echo %VERSION%>dependencies\version
 
 echo.
-echo  Installing PyInstaller and Pillow...
-pip install pyinstaller pillow markdown tkinterweb -q
+echo  Installing PyInstaller, Pillow and the console client...
+pip install pyinstaller pillow markdown tkinterweb websocket-client -q
 if errorlevel 1 (
-    echo  [ERROR] Failed to install PyInstaller/Pillow.
+    echo  [ERROR] Failed to install the build packages.
     pause
     exit /b 1
 )

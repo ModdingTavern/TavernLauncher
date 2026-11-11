@@ -192,14 +192,18 @@ class ConsoleWindow(tk.Toplevel):
             self._status_var.set("No console token")
             self._append("console_token.txt not found — start the server first.\n", "err")
             return
-        self._ws_client = WsConsoleClient()
+        client = self._ws_client = WsConsoleClient()
 
         def worker():
-            ok, msg = self._ws_client.connect(
+            ok, msg = client.connect(
                 "127.0.0.1", token,
                 on_line=lambda t: self.after(0, lambda p=t: self._append(p)),
                 on_disc=lambda r: self.after(0, lambda: self._on_disconnected(r)),
             )
+            if self._stop.is_set():
+                # Closed while connecting: drop the socket nobody will read.
+                client.disconnect()
+                return
             if ok:
                 self._connected = True
                 self.after(0, lambda: self._status_var.set("Connected"))
@@ -219,11 +223,12 @@ class ConsoleWindow(tk.Toplevel):
             return
         self.v_cmd.set("")
         self._append(f"> {cmd}\n", "cyan")
-        self._ws_client.send(cmd)
+        if not self._ws_client.send(cmd):
+            self._append("Not sent: not connected\n", "err")
 
     def _on_close(self):
         self._stop.set()
-        if hasattr(self, "_ws_client"):
+        if self._ws_client is not None:
             self._ws_client.disconnect()
         self.destroy()
 
