@@ -46,6 +46,7 @@ def register_auth_handler(predicate, handler):
 
 
 SERVER_SECRET_FILE = os.path.join(_tavern_data_dir(), "server_secret.key")
+CONSOLE_TOKENS_FILE = os.path.join(_tavern_data_dir(), "console_tokens.json")
 
 
 def _load_or_create_server_secret():
@@ -78,7 +79,10 @@ def _load_or_create_server_secret():
 def _b64url(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
 
-def _jwt(payload, key=None):
+def _b64(b): return base64.b64encode(b).rstrip(b"=").decode()
+
+
+def _jwt(payload, key=None, encode_payload=_b64url):
     """Build a HS256 JWT signed with key (defaults to the server secret).
     Deliberately re-checks the secret file's actual current state on every
     call rather than caching it once — if server_secret.key gets deleted
@@ -89,24 +93,50 @@ def _jwt(payload, key=None):
     if key is None:
         key = _load_or_create_server_secret()
     h = _b64url(b'{"alg":"HS256","typ":"JWT"}')
-    b = _b64url(json.dumps(payload, separators=(",", ":")).encode())
+    b = encode_payload(json.dumps(payload, separators=(",", ":")).encode())
     s = _b64url(_hmac.new(key, f"{h}.{b}".encode(), hashlib.sha256).digest())
     return f"{h}.{b}.{s}"
 
 
+def _owner_generation():
+    """The owner console token's generation, kept by TavernLib in
+    console_tokens.json and raised by `token rotate owner`. 0 when the file
+    is missing (never rotated), None when it can't be read."""
+    try:
+        with open(CONSOLE_TOKENS_FILE, encoding="utf-8-sig") as f:
+            gen = json.load(f).get("owner_generation", 0)
+    except FileNotFoundError:
+        return 0
+    except Exception:
+        return None
+    if isinstance(gen, bool) or not isinstance(gen, int) or gen < 0:
+        return None
+    return gen
+
+
 def build_console_token():
     """
-    Build the console auth token signed with this server's unique secret.
-    Written to console_token.txt — the only credential the WS console accepts.
+    The owner console token, signed with this server's secret: the same text
+    TavernLib writes to console_token.txt. None when console_tokens.json can't
+    be read, since the server refuses any generation but the current one.
+    Generation 0 has no gen claim, so it is the text every earlier version
+    wrote. The payload is standard base64, as TavernLib writes it: the game
+    reads it with Convert.FromBase64String, which refuses base64url's - and _.
     """
-    return _jwt({
+    gen = _owner_generation()
+    if gen is None:
+        return None
+    payload = {
         "UserId": "0", "Username": "Server", "role": "Access",
         "is_verified": "True", "is_member": "True", "server_id": "-1",
         "Policy": ["offline", "play_offline", "server_access_pre_alpha",
                    "game_access_public", "server_owner", "debug_features",
                    "database_admin", "reuse_refresh_tokens"],
-        "exp": 9999999999, "iss": "AltaWebAPI", "aud": "AltaClient"
-    })  # signed with the current server secret — see _jwt()
+    }
+    if gen:
+        payload["gen"] = gen
+    payload.update({"exp": 9999999999, "iss": "AltaWebAPI", "aud": "AltaClient"})
+    return _jwt(payload, encode_payload=_b64)
 
 
 def build_server_tokens():
