@@ -1,4 +1,5 @@
 import ctypes
+import math
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
@@ -10,6 +11,8 @@ MIN_OPEN_WIDTH = 540
 FLOOR_WIDTH = 420
 FLOOR_HEIGHT = 320
 LOG_MIN_LINES = 4
+FOOTER_PAD_X = 14
+FOOTER_PAD_BOTTOM = 6
 SCROLL_STEP = 24
 NEAR_EDGE = 120
 OWN_WHEEL = {"Text", "Listbox", "TCombobox", "Treeview"}
@@ -107,6 +110,9 @@ class ScrollArea:
     def _need_height(self):
         return self.body.winfo_reqheight()
 
+    def _need_width(self):
+        return self.body.winfo_reqwidth()
+
     def _schedule(self, event=None):
         if self._pending:
             return
@@ -123,7 +129,7 @@ class ScrollArea:
     def _layout(self, width, height):
         if width <= 1 or height <= 1:
             return
-        need_w = self.body.winfo_reqwidth()
+        need_w = self._need_width()
         need_h = self._need_height()
         bar_w = self.vbar.winfo_reqwidth()
         bar_h = self.hbar.winfo_reqheight()
@@ -184,16 +190,22 @@ class ScrollArea:
 class ScreenFit(ScrollArea):
     def __init__(self, window, bg, min_open_width=MIN_OPEN_WIDTH):
         super().__init__(window, bg)
+        self.footer_canvas = tk.Canvas(window, bg=bg, width=1, height=1, bd=0,
+                                       highlightthickness=0, takefocus=False)
+        self.footer_canvas.pack(side="bottom", fill="x", pady=(0, FOOTER_PAD_BOTTOM))
+        self.footer = tk.Frame(self.footer_canvas, bg=bg)
+        self._footer_item = self.footer_canvas.create_window(FOOTER_PAD_X, 0, anchor="nw", window=self.footer)
+        self._footer_size = (0, 0)
+        self.canvas.configure(xscrollcommand=self._update_horizontal_view)
+        window.bind("<FocusIn>", self._on_focus, add="+")
         self.shell.pack(fill="both", expand=True)
         self.window = window
         self.min_open_width = min_open_width
-        self.footer = None
         self.stretch = None
         self._fitted = False
 
-    def set_parts(self, footer, stretch):
-        self.footer = footer
-        self.stretch = stretch
+    def set_log(self, log):
+        self.stretch = log
 
     def fit_once(self):
         if self._fitted:
@@ -204,12 +216,63 @@ class ScreenFit(ScrollArea):
         except Exception:
             pass
 
-    def _footer_height(self):
-        info = self.footer.pack_info()
-        pady = info.get("pady", 0)
-        if isinstance(pady, (tuple, list)):
-            pady = sum(int(p) for p in pady)
-        return self.footer.winfo_reqheight() + int(pady)
+    def _need_width(self):
+        return max(super()._need_width(), self.footer.winfo_reqwidth() + 2 * FOOTER_PAD_X)
+
+    def _layout(self, width, height):
+        footer_w = max(width, self.footer.winfo_reqwidth() + 2 * FOOTER_PAD_X)
+        footer_h = self.footer.winfo_reqheight()
+        if (footer_w, footer_h) != self._footer_size:
+            self._footer_size = (footer_w, footer_h)
+            self.footer_canvas.configure(height=footer_h, scrollregion=(0, 0, footer_w, footer_h))
+            self.footer_canvas.itemconfigure(self._footer_item, width=footer_w - 2 * FOOTER_PAD_X)
+        super()._layout(width, height)
+        self._sync_footer()
+
+    def _update_horizontal_view(self, first, last):
+        self.hbar.set(first, last)
+        self._sync_footer()
+
+    def _sync_footer(self):
+        # The footer stays pinned vertically. It follows the main scrollbar
+        # horizontally only as far as needed to show its own controls.
+        width, _ = self._footer_size
+        if width:
+            self.footer_canvas.xview_moveto(self.canvas.canvasx(0) / width)
+
+    def _on_focus(self, event):
+        self.shell.after_idle(self._reveal_focus, event.widget)
+
+    def _reveal_focus(self, widget):
+        try:
+            if self.window.focus_get() is not widget or not widget.winfo_viewable():
+                return
+            parent = widget.master
+            while parent is not None and parent not in (self.body, self.footer):
+                parent = parent.master
+            if parent is None or self._last is None:
+                return
+            body_w, body_h, _, _ = self._last
+            viewport = self.footer_canvas if parent is self.footer else self.canvas
+            self._reveal_axis(widget.winfo_rootx() - viewport.winfo_rootx(), widget.winfo_width(),
+                              viewport.winfo_width(), viewport.canvasx(0), body_w, self.canvas.xview_moveto)
+            if parent is self.body:
+                self._reveal_axis(widget.winfo_rooty() - viewport.winfo_rooty(), widget.winfo_height(),
+                                  viewport.winfo_height(), viewport.canvasy(0), body_h, self.canvas.yview_moveto)
+        except (AttributeError, KeyError, tk.TclError):
+            return
+
+    @staticmethod
+    def _reveal_axis(start, size, visible, origin, extent, move):
+        if size > visible:
+            return
+        if start < 0:
+            edge = math.floor((origin + start) / SCROLL_STEP)
+        elif start + size > visible:
+            edge = math.ceil((origin + start + size - visible) / SCROLL_STEP)
+        else:
+            return
+        move(edge * SCROLL_STEP / extent)
 
     def _need_height(self):
         need = self.body.winfo_reqheight()
@@ -221,8 +284,8 @@ class ScreenFit(ScrollArea):
     def _open_size(self):
         window = self.window
         window.update_idletasks()
-        footer_h = self._footer_height()
-        natural_w = max(self.min_open_width, self.body.winfo_reqwidth(), self.footer.winfo_reqwidth() + 28)
+        footer_h = self.footer.winfo_reqheight() + FOOTER_PAD_BOTTOM
+        natural_w = max(self.min_open_width, self._need_width())
         natural_h = self.body.winfo_reqheight() + footer_h
         left, top, right, bottom, chrome_w, chrome_h = _work_area(window)
         room_w = right - left - chrome_w
@@ -231,7 +294,7 @@ class ScreenFit(ScrollArea):
         height = min(natural_h, room_h)
         if self._need_height() > height - footer_h:
             width = min(width + self.vbar.winfo_reqwidth(), room_w)
-        window.minsize(min(width, max(FLOOR_WIDTH, self.footer.winfo_reqwidth() + 28)),
+        window.minsize(min(width, max(FLOOR_WIDTH, self.footer.winfo_reqwidth() + 2 * FOOTER_PAD_X)),
                        min(height, FLOOR_HEIGHT))
         geometry = f"{width}x{height}"
         if natural_h + NEAR_EDGE > room_h or natural_w + NEAR_EDGE > room_w:
