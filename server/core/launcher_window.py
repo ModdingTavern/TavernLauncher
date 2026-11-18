@@ -223,9 +223,8 @@ class ServerLauncher(tk.Tk):
             self.log.tag_config(t, foreground=c)
 
         # ── Enhanced Debugging / Show MelonLoader toggles ────────────────────
-        df = tk.Frame(self, bg=BG)
-        df.pack(side="bottom", fill="x", padx=14, pady=(0,6), before=self._screen_fit.shell)
-        self._screen_fit.set_parts(df, self.log)
+        df = self._screen_fit.footer
+        self._screen_fit.set_log(self.log)
         self.v_debug_helper = tk.BooleanVar(value=False)
         tk.Checkbutton(df, text="Enhanced Debugging", variable=self.v_debug_helper,
                        command=self._save, bg=BG, fg=MUTED, selectcolor=SURF,
