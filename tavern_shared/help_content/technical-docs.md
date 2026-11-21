@@ -46,8 +46,8 @@ If the admin responds to your ticket this button will flash, alerting you about 
 
 If you want to execute commands on your or another server, you can do that via this menu.
 In order to do this you'll need access to the console token of that specific server.
-You will have to ask the server admin to give this to you.
-If you are the server admin, simply look at your server TavernLauncher and click the "Copy Console Token" at the top.
+You will have to ask the server admin to give this to you: usually a named token that only runs what they picked for you.
+If you are the server admin, click "Copy Console Token" at the top of your server TavernLauncher, or make a named token in its Tokens window.
 
 ### TavernKeeper
 
@@ -162,6 +162,20 @@ Good to know: this button will flash if a ticket is pending your feedback.
 
 Clicking this button will open the command console, allowing you to execute admin commands on your server.
 
+### Tokens
+
+Named console tokens: one for each moderator, friend or bot, each with its own list of commands it may run.
+Needs the server open and TavernLib 1.5.4 or newer.
+
+- **New token**: pick a name, a preset (Full admin, Moderator, Builder, Viewer) or tick commands yourself, and when it expires. You get the token's text to send them.
+- **Save changes**: applies at once, also to someone who is already connected. Nobody needs a new token.
+- **Copy token**: copies its text again.
+- **New text**: the old text stops working and its open sessions close. Use it when a token leaked.
+- **Revoke**: stops a token for good.
+- **Log**: every login, refused login and command, per token.
+
+The list of commands comes from your server, so commands from mods are in it too. token and repeat can never be given, and commands only the owner can run aren't listed. A Full admin token runs everything else.
+
 ## Additional information
 
 ### Game Ports
@@ -182,6 +196,7 @@ This section explains what the port range does per port.
 Since there is no central authentication (we are not linked to Alta), a homebrew solution was developed to secure admin access.
 For people to access your console or TavernKeeper remotely, they need access to your console token.
 Do not share this token lightly as it will essentially make someone admin over your server!
+Keep it for tools you run yourself. For moderators, friends and bots, make a named token with the Tokens button instead: you choose what it runs and can revoke it alone.
 
 ### Archive log button
 
