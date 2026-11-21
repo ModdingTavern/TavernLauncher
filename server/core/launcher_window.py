@@ -46,6 +46,7 @@ from server.core.auth_service import (
     start_auth_service, AUTH_PORT, build_console_token, build_server_tokens,
 )
 from server.core.console_window import ConsoleWindow
+from server.core.tokens_window import TokensWindow
 from server.core.server_process import remember, forget, left_running, console_port_free
 from server.core.tickets_window import TicketsWindow
 from server.core.player_manager import PlayerManagerWindow
@@ -85,6 +86,7 @@ class ServerLauncher(tk.Tk):
         self._mods_win = None
         self._sett_win = None
         self._console_win = None
+        self._tokens_win = None
         self._tickets_win = None
         self._mods_animating  = False
         self._mods_anim_job   = None
@@ -144,6 +146,8 @@ class ServerLauncher(tk.Tk):
         self._mods_btn = _btn(btn_row_mods, "🧪 Mods", self._open_mods,
              font=("Segoe UI",9), pady=5, padx=10)
         self._mods_btn.pack(side="left", padx=(6,0))
+        _btn(btn_row_mods, "📁 Saves", self._open_saves,
+             font=("Segoe UI",9), pady=5, padx=10).pack(side="right")
         _section_label(body, "GAME PORT")
         pf2 = _field(body)
         self.v_port = tk.StringVar(value="1757")
@@ -176,8 +180,8 @@ class ServerLauncher(tk.Tk):
             normal_bg=SURF2, alert_bg=RED)
         _btn(tr, "🖥 Console",  self._open_console,  font=("Segoe UI",9),
              pady=7, padx=12).pack(side="left", padx=6)
-        _btn(tr, "📁 Saves",    self._open_saves,    font=("Segoe UI",9),
-             pady=7, padx=12).pack(side="right")
+        _btn(tr, "🔑 Tokens",   self._open_tokens,   font=("Segoe UI",9),
+             pady=7, padx=12).pack(side="left")
         _divider(body)
         sf = tk.Frame(body, bg=SURF, highlightbackground=BORDER, highlightthickness=1)
         sf.pack(fill="x", padx=20, pady=(0,6))
@@ -494,6 +498,11 @@ class ServerLauncher(tk.Tk):
         if self._console_win and self._console_win.winfo_exists():
             self._console_win.lift(); return
         self._console_win = ConsoleWindow(self)
+
+    def _open_tokens(self):
+        if self._tokens_win and self._tokens_win.winfo_exists():
+            self._tokens_win.lift(); return
+        self._tokens_win = TokensWindow(self)
 
     def _open_mods(self):
         exe = self.v_exe.get().strip()
